@@ -3,7 +3,7 @@
 M5Stack StackChan（K151 / CoreS3）を、VOICEVOXで話せるデスクトップロボットにする
 Arduino / PlatformIOプロジェクトです。
 
-**現在のリリース: β0.1.0**
+**現在のリリース: [β0.2.5](https://github.com/Xenoah/stackchan-codex/releases/tag/v0.2.5-beta.1)**
 
 VOICEVOX EngineへWi-Fi経由で文章を送り、返されたWAV音声をCoreS3の
 内蔵スピーカーからストリーミング再生します。再生中はPCM波形の振幅を解析し、

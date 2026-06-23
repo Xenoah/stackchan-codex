@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [β0.2.5] - 2026-06-23
+
+M5Stack-Avatarによる顔機能の全面実装と、起動時に顔が表示されない問題を修正した
+βリリースです。
+
 ### Changed
 
 - 独自の顔描画をM5Stack-Avatar v0.10.0へ置き換え
@@ -68,4 +73,6 @@
 - サーボ、カメラ、NFC、IR等はライブラリ準備段階
 - β版のためAPIや設定項目は今後変更される可能性あり
 
+[Unreleased]: https://github.com/Xenoah/stackchan-codex/compare/v0.2.5-beta.1...HEAD
+[β0.2.5]: https://github.com/Xenoah/stackchan-codex/releases/tag/v0.2.5-beta.1
 [β0.1.0]: https://github.com/Xenoah/stackchan-codex/releases/tag/v0.1.0-beta.1
