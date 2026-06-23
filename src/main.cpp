@@ -21,6 +21,17 @@ bool ignoreNextTopClick = false;
 uint32_t lipSyncLastInputAt = 0;
 uint32_t lipSyncLastFrameAt = 0;
 
+enum class ServoStartupChoice {
+  KeepPosition,
+  GoHome,
+};
+
+enum class ServoPromptButton {
+  None,
+  Keep,
+  Home,
+};
+
 void setLipSyncLevel(int level) {
   targetMouthOpen = constrain(level, 0, 100);
   lipSyncLastInputAt = millis();
@@ -156,6 +167,184 @@ void drawBootFallbackFace() {
   M5.Display.fillRoundRect(cx - 42, cy + 30, 84, 7, 3, TFT_WHITE);
 }
 
+ServoPromptButton servoPromptButtonAt(int16_t x, int16_t y) {
+  constexpr int16_t kButtonTop = 160;
+  constexpr int16_t kButtonBottom = 226;
+
+  if (y < kButtonTop || y > kButtonBottom) {
+    return ServoPromptButton::None;
+  }
+  return x < M5.Display.width() / 2
+             ? ServoPromptButton::Keep
+             : ServoPromptButton::Home;
+}
+
+void drawServoStartupPrompt(ServoPromptButton pressed) {
+  auto& display = M5.Display;
+  const int16_t width = display.width();
+  constexpr int16_t kMargin = 14;
+  constexpr int16_t kGap = 10;
+  constexpr int16_t kButtonTop = 160;
+  constexpr int16_t kButtonHeight = 66;
+  const int16_t buttonWidth = (width - kMargin * 2 - kGap) / 2;
+  const int16_t keepX = kMargin;
+  const int16_t homeX = keepX + buttonWidth + kGap;
+
+  const uint16_t keepColor =
+      pressed == ServoPromptButton::Keep ? 0x7800 : 0x4208;
+  const uint16_t homeColor =
+      pressed == ServoPromptButton::Home ? 0x03E0 : 0x0260;
+
+  display.startWrite();
+  display.fillScreen(TFT_BLACK);
+  display.setFont(&fonts::Font2);
+  display.setTextDatum(middle_center);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextSize(2);
+  display.drawString("SERVO STARTUP", width / 2, 30);
+
+  display.setTextSize(1);
+  display.drawString("Move head to HOME (0, 0)?", width / 2, 76);
+  display.setTextColor(TFT_YELLOW, TFT_BLACK);
+  display.drawString("Clear the area before selecting OK", width / 2, 111);
+  display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  display.drawString("Touch a button to continue", width / 2, 137);
+
+  display.fillRoundRect(
+      keepX, kButtonTop, buttonWidth, kButtonHeight, 10, keepColor);
+  display.drawRoundRect(
+      keepX, kButtonTop, buttonWidth, kButtonHeight, 10, TFT_WHITE);
+  display.fillRoundRect(
+      homeX, kButtonTop, buttonWidth, kButtonHeight, 10, homeColor);
+  display.drawRoundRect(
+      homeX, kButtonTop, buttonWidth, kButtonHeight, 10, TFT_WHITE);
+
+  display.setTextColor(TFT_WHITE);
+  display.setTextSize(2);
+  display.drawString("NO", keepX + buttonWidth / 2, kButtonTop + 22);
+  display.drawString("OK", homeX + buttonWidth / 2, kButtonTop + 22);
+  display.setTextSize(1);
+  display.drawString(
+      "KEEP", keepX + buttonWidth / 2, kButtonTop + 49);
+  display.drawString(
+      "HOME", homeX + buttonWidth / 2, kButtonTop + 49);
+  display.endWrite();
+}
+
+ServoStartupChoice askServoStartupChoice() {
+  avatarFace.pauseDrawing();
+  delay(40);
+  drawServoStartupPrompt(ServoPromptButton::None);
+
+  int16_t touchX = 0;
+  int16_t touchY = 0;
+
+  // Ignore a finger that was already on the display during startup.
+  while (M5.Display.getTouch(&touchX, &touchY)) {
+    M5StackChan.update();
+    delay(10);
+  }
+
+  bool wasTouching = false;
+  ServoPromptButton pressed = ServoPromptButton::None;
+
+  while (true) {
+    M5StackChan.update();
+    const bool touching = M5.Display.getTouch(&touchX, &touchY);
+    const ServoPromptButton current =
+        touching ? servoPromptButtonAt(touchX, touchY)
+                 : ServoPromptButton::None;
+
+    if (touching && current != pressed) {
+      pressed = current;
+      drawServoStartupPrompt(pressed);
+    }
+
+    if (!touching && wasTouching) {
+      const ServoPromptButton selected = pressed;
+      pressed = ServoPromptButton::None;
+      drawServoStartupPrompt(pressed);
+
+      if (selected == ServoPromptButton::Keep) {
+        avatarFace.resumeDrawing();
+        avatarFace.resetToDefault();
+        return ServoStartupChoice::KeepPosition;
+      }
+      if (selected == ServoPromptButton::Home) {
+        avatarFace.resumeDrawing();
+        avatarFace.resetToDefault();
+        return ServoStartupChoice::GoHome;
+      }
+    }
+
+    wasTouching = touching;
+    delay(10);
+  }
+}
+
+bool moveServoToHomeSafely() {
+  constexpr int kHomeSpeed = 180;
+  constexpr uint32_t kPowerStabilizeMs = 250;
+  constexpr uint32_t kHomeTimeoutMs = 12000;
+
+  M5StackChan.showRgbColor(48, 24, 0);
+  avatarFace.setExpression(m5avatar::Expression::Doubt);
+  avatarFace.showStatus("SERVO: HOME", 0);
+
+  M5StackChan.setServoPowerEnabled(true);
+  delay(kPowerStabilizeMs);
+
+  // Read the physical position after power-up, then write that same position
+  // as the first target while torque is still off. This prevents a jump to a
+  // stale target when torque is enabled.
+  const auto currentAngles = M5StackChan.Motion.getCurrentAngles();
+  Serial.printf("Servo current yaw=%d pitch=%d\n",
+                currentAngles.x, currentAngles.y);
+
+  M5StackChan.Motion.setAutoAngleSyncEnabled(true);
+  M5StackChan.Motion.setAutoTorqueReleaseEnabled(false);
+  M5StackChan.Motion.move(
+      currentAngles.x, currentAngles.y, 1000);
+  delay(100);
+
+  M5StackChan.Motion.setTorqueEnabled(true);
+  delay(80);
+  M5StackChan.Motion.goHome(kHomeSpeed);
+
+  const uint32_t startedAt = millis();
+  while (M5StackChan.Motion.isMoving() &&
+         millis() - startedAt < kHomeTimeoutMs) {
+    M5StackChan.update();
+    avatarFace.update();
+    delay(20);
+  }
+
+  const bool completed = !M5StackChan.Motion.isMoving();
+  if (!completed) {
+    M5StackChan.Motion.stop();
+    delay(100);
+  }
+
+  M5StackChan.Motion.setTorqueEnabled(false);
+  M5StackChan.Motion.setAutoTorqueReleaseEnabled(true);
+  M5StackChan.setServoPowerEnabled(false);
+
+  if (completed) {
+    Serial.println("Servo home completed");
+    avatarFace.resetToDefault();
+    avatarFace.showStatus("SERVO: HOME OK", 1800);
+    M5StackChan.showRgbColor(0, 48, 0);
+  } else {
+    Serial.println("Servo home timeout");
+    avatarFace.setExpression(m5avatar::Expression::Angry);
+    avatarFace.showStatus("SERVO TIMEOUT", 3000);
+    avatarFace.returnToDefaultAfter(3000);
+    M5StackChan.showRgbColor(96, 0, 0);
+  }
+
+  return completed;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(100);
@@ -190,6 +379,17 @@ void setup() {
   avatarFace.resetToDefault();
   avatarFace.showStatus("BOOT", 1200);
   Serial.println("Avatar started");
+
+  const ServoStartupChoice servoChoice = askServoStartupChoice();
+  if (servoChoice == ServoStartupChoice::GoHome) {
+    Serial.println("Servo startup choice: HOME");
+    moveServoToHomeSafely();
+  } else {
+    Serial.println("Servo startup choice: KEEP");
+    M5StackChan.Motion.setTorqueEnabled(false);
+    M5StackChan.setServoPowerEnabled(false);
+    avatarFace.showStatus("SERVO: KEEP", 1800);
+  }
 
   M5.Speaker.begin();
   M5.Speaker.setVolume(160);

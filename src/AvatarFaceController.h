@@ -35,6 +35,8 @@ class AvatarFaceController {
   void setMouthOpenRatio(float ratio);
   void setGaze(float vertical, float horizontal);
   void showStatus(const char* text, uint32_t durationMs = 1400);
+  void pauseDrawing();
+  void resumeDrawing();
   void resetToDefault();
   void returnToDefaultAfter(uint32_t delayMs);
 
@@ -65,6 +67,7 @@ class AvatarFaceController {
   size_t transformPatternIndex_ = 0;
 
   bool started_ = false;
+  bool drawingPaused_ = false;
   bool showcaseEnabled_ = false;
   bool blinkClosed_ = false;
   uint32_t nextShowcaseAt_ = 0;

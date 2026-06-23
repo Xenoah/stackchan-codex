@@ -164,6 +164,22 @@ void AvatarFaceController::showStatus(const char* text,
   statusClearAt_ = durationMs == 0 ? 0 : millis() + durationMs;
 }
 
+void AvatarFaceController::pauseDrawing() {
+  if (!started_ || drawingPaused_) {
+    return;
+  }
+  avatar_.suspend();
+  drawingPaused_ = true;
+}
+
+void AvatarFaceController::resumeDrawing() {
+  if (!started_ || !drawingPaused_) {
+    return;
+  }
+  avatar_.resume();
+  drawingPaused_ = false;
+}
+
 void AvatarFaceController::resetToDefault() {
   showcaseEnabled_ = false;
   expressionIndex_ = 5;
