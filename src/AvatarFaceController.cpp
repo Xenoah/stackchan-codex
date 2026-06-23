@@ -1,6 +1,7 @@
 #include "AvatarFaceController.h"
 
 #include <M5Unified.h>
+#include <esp_system.h>
 
 namespace {
 
@@ -34,6 +35,12 @@ constexpr const char* kTransformNames[] = {
     "NORMAL", "ZOOM IN", "ZOOM OUT", "TILT LEFT", "TILT RIGHT",
 };
 
+constexpr uint32_t kDefaultReturnDelayMs = 5000;
+constexpr uint32_t kBlinkIntervalMinMs = 3000;
+constexpr uint32_t kBlinkIntervalMaxMs = 10000;
+constexpr uint32_t kBlinkClosedMinMs = 100;
+constexpr uint32_t kBlinkClosedMaxMs = 180;
+
 size_t wrapIndex(size_t current, int direction, size_t count) {
   const int next = static_cast<int>(current) + direction;
   return static_cast<size_t>((next % static_cast<int>(count) +
@@ -50,15 +57,21 @@ void AvatarFaceController::begin() {
 
   initializeFaces();
   initializePalettes();
+  randomSeed(esp_random());
+
+  // Avatar setters suspend the drawing task internally. Start that task
+  // before applying the initial face state; calling them first can suspend
+  // the setup task itself because the drawing task handle is still null.
+  avatar_.setPosition(0, 0);
+  avatar_.init(8);
+  started_ = true;
+
   applyFace();
   applyPalette();
   applyExpression();
   applyEyePattern();
   applyTransform();
-
-  avatar_.setPosition(0, 0);
-  avatar_.init(8);
-  started_ = true;
+  scheduleNextBlink(millis());
 }
 
 void AvatarFaceController::update() {
@@ -78,6 +91,13 @@ void AvatarFaceController::update() {
     advanceShowcase();
     nextShowcaseAt_ = now + 1800;
   }
+
+  if (!showcaseEnabled_ && defaultReturnAt_ != 0 &&
+      static_cast<int32_t>(now - defaultReturnAt_) >= 0) {
+    resetToDefault();
+  }
+
+  updateBlink(now);
 }
 
 void AvatarFaceController::setExpression(
@@ -95,24 +115,28 @@ void AvatarFaceController::nextExpression() {
   expressionIndex_ = (expressionIndex_ + 1) % kExpressionCount;
   applyExpression();
   showStatus(expressionName());
+  returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
 void AvatarFaceController::nextFace() {
   faceIndex_ = (faceIndex_ + 1) % kFaceCount;
   applyFace();
   showStatus(faceName());
+  returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
 void AvatarFaceController::nextPalette(int direction) {
   paletteIndex_ = wrapIndex(paletteIndex_, direction, kPaletteCount);
   applyPalette();
   showStatus(paletteName());
+  returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
 void AvatarFaceController::nextEyePattern() {
   eyePatternIndex_ = (eyePatternIndex_ + 1) % kEyePatternCount;
   applyEyePattern();
   showStatus(eyePatternName());
+  returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
 void AvatarFaceController::nextTransform() {
@@ -120,6 +144,7 @@ void AvatarFaceController::nextTransform() {
       (transformPatternIndex_ + 1) % kTransformPatternCount;
   applyTransform();
   showStatus(transformName());
+  returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
 void AvatarFaceController::setMouthOpenRatio(float ratio) {
@@ -136,13 +161,44 @@ void AvatarFaceController::setGaze(float vertical, float horizontal) {
 void AvatarFaceController::showStatus(const char* text,
                                       uint32_t durationMs) {
   avatar_.setSpeechText(text);
-  statusClearAt_ = millis() + durationMs;
+  statusClearAt_ = durationMs == 0 ? 0 : millis() + durationMs;
+}
+
+void AvatarFaceController::resetToDefault() {
+  showcaseEnabled_ = false;
+  expressionIndex_ = 5;
+  faceIndex_ = 0;
+  paletteIndex_ = 0;
+  eyePatternIndex_ = 0;
+  transformPatternIndex_ = 0;
+
+  avatar_.setSpeechText("");
+  avatar_.setMouthOpenRatio(0.0f);
+  applyFace();
+  applyPalette();
+  applyExpression();
+  applyEyePattern();
+  applyTransform();
+
+  statusClearAt_ = 0;
+  defaultReturnAt_ = 0;
+}
+
+void AvatarFaceController::returnToDefaultAfter(uint32_t delayMs) {
+  defaultReturnAt_ = millis() + delayMs;
 }
 
 void AvatarFaceController::toggleShowcase() {
   showcaseEnabled_ = !showcaseEnabled_;
-  nextShowcaseAt_ = millis();
-  showStatus(showcaseEnabled_ ? "SHOWCASE ON" : "SHOWCASE OFF");
+  defaultReturnAt_ = 0;
+
+  if (showcaseEnabled_) {
+    nextShowcaseAt_ = millis();
+    showStatus("SHOWCASE ON");
+  } else {
+    resetToDefault();
+    showStatus("SHOWCASE OFF");
+  }
 }
 
 bool AvatarFaceController::isShowcaseEnabled() const {
@@ -215,26 +271,33 @@ void AvatarFaceController::applyEyePattern() {
 
   switch (pattern) {
     case EyePattern::AutoBlink:
-      avatar_.setIsAutoBlink(true);
+      // Replace the library interval with a 3-10 second random scheduler.
+      avatar_.setIsAutoBlink(false);
       avatar_.setEyeOpenRatio(1.0f);
+      blinkClosed_ = false;
+      scheduleNextBlink(millis());
       break;
     case EyePattern::Open:
       avatar_.setIsAutoBlink(false);
       avatar_.setEyeOpenRatio(1.0f);
+      blinkClosed_ = false;
       break;
     case EyePattern::WinkLeft:
       avatar_.setIsAutoBlink(false);
       avatar_.setLeftEyeOpenRatio(0.0f);
       avatar_.setRightEyeOpenRatio(1.0f);
+      blinkClosed_ = false;
       break;
     case EyePattern::WinkRight:
       avatar_.setIsAutoBlink(false);
       avatar_.setLeftEyeOpenRatio(1.0f);
       avatar_.setRightEyeOpenRatio(0.0f);
+      blinkClosed_ = false;
       break;
     case EyePattern::Closed:
       avatar_.setIsAutoBlink(false);
       avatar_.setEyeOpenRatio(0.0f);
+      blinkClosed_ = true;
       break;
   }
 }
@@ -284,4 +347,32 @@ void AvatarFaceController::advanceShowcase() {
   applyEyePattern();
   applyTransform();
   showStatus(expressionName(), 900);
+}
+
+void AvatarFaceController::updateBlink(uint32_t now) {
+  if (eyePatternIndex_ !=
+      static_cast<size_t>(EyePattern::AutoBlink)) {
+    return;
+  }
+
+  if (!blinkClosed_ &&
+      static_cast<int32_t>(now - nextBlinkAt_) >= 0) {
+    avatar_.setEyeOpenRatio(0.0f);
+    blinkClosed_ = true;
+    blinkOpenAt_ =
+        now + random(kBlinkClosedMinMs, kBlinkClosedMaxMs + 1);
+    return;
+  }
+
+  if (blinkClosed_ &&
+      static_cast<int32_t>(now - blinkOpenAt_) >= 0) {
+    avatar_.setEyeOpenRatio(1.0f);
+    blinkClosed_ = false;
+    scheduleNextBlink(now);
+  }
+}
+
+void AvatarFaceController::scheduleNextBlink(uint32_t now) {
+  nextBlinkAt_ =
+      now + random(kBlinkIntervalMinMs, kBlinkIntervalMaxMs + 1);
 }

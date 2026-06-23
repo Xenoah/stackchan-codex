@@ -1,4 +1,5 @@
 #include <M5Unified.h>
+#include <esp_system.h>
 
 #include "AvatarFaceController.h"
 #include "ConfigPortal.h"
@@ -69,20 +70,6 @@ void serviceApp() {
   updateLipSync();
 }
 
-void drawSetupScreen() {
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Display.setTextDatum(middle_center);
-  M5.Display.setFont(&fonts::Font2);
-  M5.Display.setTextSize(1);
-  M5.Display.drawString("StackChan Wi-Fi Setup", 160, 32);
-  M5.Display.drawString(configPortal.accessPointName(), 160, 75);
-  M5.Display.drawString("Password: stackchan", 160, 105);
-  M5.Display.drawString("Open http://192.168.4.1", 160, 145);
-  M5.Display.drawString("VOICEVOX host / Wi-Fi", 160, 180);
-  M5.Display.drawString("wo settei shite kudasai", 160, 205);
-}
-
 void speakConfiguredText() {
   if (speaking || !configPortal.isConnected()) {
     return;
@@ -107,11 +94,12 @@ void speakConfiguredText() {
   stopLipSync();
 
   if (success) {
-    avatarFace.setExpression(m5avatar::Expression::Neutral);
+    avatarFace.resetToDefault();
     M5StackChan.showRgbColor(0, 48, 0);
   } else {
     avatarFace.setExpression(m5avatar::Expression::Angry);
     avatarFace.showStatus("VOICEVOX ERROR", 2500);
+    avatarFace.returnToDefaultAfter(2500);
     M5StackChan.showRgbColor(96, 0, 0);
     Serial.printf("VOICEVOX error: %s\n", voiceVox.lastError().c_str());
   }
@@ -151,25 +139,69 @@ void handleTopTouch() {
   }
 }
 
+void drawBootFallbackFace() {
+  auto cfg = M5.config();
+  M5.begin(cfg);
+
+  if (M5.Display.width() < M5.Display.height()) {
+    M5.Display.setRotation(1);
+  }
+  M5.Display.setBrightness(160);
+  M5.Display.fillScreen(TFT_BLACK);
+
+  const int cx = M5.Display.width() / 2;
+  const int cy = M5.Display.height() / 2;
+  M5.Display.fillCircle(cx - 64, cy - 18, 12, TFT_WHITE);
+  M5.Display.fillCircle(cx + 64, cy - 18, 12, TFT_WHITE);
+  M5.Display.fillRoundRect(cx - 42, cy + 30, 84, 7, 3, TFT_WHITE);
+}
+
 void setup() {
   Serial.begin(115200);
+  delay(100);
+  Serial.printf("\nStackChan boot, reset reason=%d\n",
+                static_cast<int>(esp_reset_reason()));
+
+  // Bring up the display first. This fallback remains visible even if a
+  // damaged or disconnected body peripheral blocks the later BSP startup.
+  drawBootFallbackFace();
+  Serial.println("Fallback face ready");
+
+  Serial.println("Initializing StackChan BSP...");
   M5StackChan.begin();
+  Serial.println("StackChan BSP ready");
 
   // Keep the servo APIs ready while preventing unintended movement.
   M5StackChan.Motion.setTorqueEnabled(false);
   M5StackChan.setServoPowerEnabled(false);
   M5StackChan.showRgbColor(0, 0, 0);
+  Serial.println("Servo torque and power disabled");
 
   if (M5.Display.width() < M5.Display.height()) {
     M5.Display.setRotation(1);
   }
+  M5.Display.setBrightness(160);
+  M5.Display.fillScreen(TFT_BLACK);
+
+  // Start the face before Wi-Fi. It remains visible during connection waits
+  // and setup portal mode.
+  Serial.println("Starting avatar...");
+  avatarFace.begin();
+  avatarFace.resetToDefault();
+  avatarFace.showStatus("BOOT", 1200);
+  Serial.println("Avatar started");
 
   M5.Speaker.begin();
   M5.Speaker.setVolume(160);
   voiceVox.setCallbacks(setLipSyncLevel, serviceApp);
 
+  Serial.println("Starting network configuration...");
   if (!configPortal.begin()) {
-    drawSetupScreen();
+    Serial.printf("Setup AP: %s, http://192.168.4.1\n",
+                  configPortal.accessPointName().c_str());
+    avatarFace.resetToDefault();
+    avatarFace.showStatus("SETUP: 192.168.4.1", 0);
+    M5StackChan.showRgbColor(48, 32, 0);
     return;
   }
 
@@ -180,7 +212,7 @@ void setup() {
                 configPortal.config().voiceVoxPort,
                 configPortal.config().voiceVoxSpeaker);
 
-  avatarFace.begin();
+  avatarFace.resetToDefault();
   avatarFace.showStatus("READY");
   M5StackChan.showRgbColor(0, 48, 0);
 }

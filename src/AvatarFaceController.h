@@ -35,6 +35,8 @@ class AvatarFaceController {
   void setMouthOpenRatio(float ratio);
   void setGaze(float vertical, float horizontal);
   void showStatus(const char* text, uint32_t durationMs = 1400);
+  void resetToDefault();
+  void returnToDefaultAfter(uint32_t delayMs);
 
   void toggleShowcase();
   bool isShowcaseEnabled() const;
@@ -64,8 +66,12 @@ class AvatarFaceController {
 
   bool started_ = false;
   bool showcaseEnabled_ = false;
+  bool blinkClosed_ = false;
   uint32_t nextShowcaseAt_ = 0;
   uint32_t statusClearAt_ = 0;
+  uint32_t defaultReturnAt_ = 0;
+  uint32_t nextBlinkAt_ = 0;
+  uint32_t blinkOpenAt_ = 0;
 
   void initializeFaces();
   void initializePalettes();
@@ -75,4 +81,6 @@ class AvatarFaceController {
   void applyEyePattern();
   void applyTransform();
   void advanceShowcase();
+  void updateBlink(uint32_t now);
+  void scheduleNextBlink(uint32_t now);
 };
