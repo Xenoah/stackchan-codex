@@ -2,6 +2,27 @@
 
 このプロジェクトの主な変更を記録します。
 
+## [Unreleased]
+
+### Changed
+
+- 独自の顔描画をM5Stack-Avatar v0.10.0へ置き換え
+- VOICEVOXリップシンクを `Avatar::setMouthOpenRatio()` へ統合
+- Bボタンで全6表情を順番に切り替え
+- Cボタンで全7顔テンプレートを順番に切り替え
+
+### Added
+
+- `Happy`、`Angry`、`Sad`、`Doubt`、`Sleepy`、`Neutral`
+- Default、Simple、Omega、Girly、Girly2、PinkDemon、Doggy
+- 自動瞬き、両目開き、左右ウィンク、両目閉じ
+- Default、Skin、Cyber、Monochrome、Demon配色
+- Normal、Zoom In、Zoom Out、Tilt Left、Tilt Right変形
+- ランダム視線、呼吸、吹き出し
+- 頭頂タップ、スワイプ、長押しによる全顔操作
+- 全パターンを自動表示するショーケース
+- `THIRD_PARTY_NOTICES.md`
+
 ## [β0.1.0] - 2026-06-22
 
 初回βリリース。
