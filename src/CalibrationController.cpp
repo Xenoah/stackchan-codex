@@ -15,7 +15,8 @@ constexpr int kPitchMin = 0;
 constexpr int kPitchMax = 900;
 constexpr int kSweepSpeed = 120;
 constexpr int kPositionTolerance = 80;
-constexpr uint32_t kMoveTimeoutMs = 15000;
+constexpr uint32_t kMoveTimeoutMs = 30000;
+constexpr uint32_t kPositionSettleMs = 300;
 constexpr uint32_t kImuCalibrationMs = 8000;
 constexpr size_t kImuSampleCount = 300;
 
@@ -268,6 +269,11 @@ bool screenTouched() {
   return M5.Display.getTouch(&x, &y);
 }
 
+bool nearTarget(int yaw, int pitch, int targetYaw, int targetPitch) {
+  return abs(yaw - targetYaw) <= kPositionTolerance &&
+         abs(pitch - targetPitch) <= kPositionTolerance;
+}
+
 }  // namespace
 
 void CalibrationController::load() {
@@ -401,6 +407,7 @@ bool CalibrationController::moveAndVerify(
   M5StackChan.Motion.move(yaw, pitch, kSweepSpeed);
   const uint32_t startedAt = millis();
   uint32_t lastDrawAt = 0;
+  uint32_t reachedSince = 0;
 
   while (true) {
     M5StackChan.update();
@@ -412,6 +419,17 @@ bool CalibrationController::moveAndVerify(
       lastDrawAt = now;
     }
 
+    if (nearTarget(current.x, current.y, yaw, pitch)) {
+      if (reachedSince == 0) {
+        reachedSince = now;
+      }
+      if (now - reachedSince >= kPositionSettleMs) {
+        break;
+      }
+    } else {
+      reachedSince = 0;
+    }
+
     if (now - startedAt > 300 && screenTouched()) {
       Serial.printf("%s emergency stop\n", title);
       M5StackChan.Motion.stop();
@@ -420,9 +438,6 @@ bool CalibrationController::moveAndVerify(
       return false;
     }
 
-    if (!M5StackChan.Motion.isMoving()) {
-      break;
-    }
     if (now - startedAt >= kMoveTimeoutMs) {
       Serial.printf("%s timeout\n", title);
       M5StackChan.Motion.stop();
@@ -440,8 +455,7 @@ bool CalibrationController::moveAndVerify(
       "%s target=(%d,%d) actual=(%d,%d)\n",
       title, yaw, pitch, actual.x, actual.y);
 
-  if (abs(actual.x - yaw) > kPositionTolerance ||
-      abs(actual.y - pitch) > kPositionTolerance) {
+  if (!nearTarget(actual.x, actual.y, yaw, pitch)) {
     stopServos();
     waitForConfirmation(
         "SERVO ERROR",
