@@ -2,11 +2,13 @@
 #include <esp_system.h>
 
 #include "AvatarFaceController.h"
+#include "CalibrationController.h"
 #include "ConfigPortal.h"
 #include "VoiceVoxClient.h"
 #include "hardware_features.h"
 
 AvatarFaceController avatarFace;
+CalibrationController calibrationController;
 ConfigPortal configPortal;
 VoiceVoxClient voiceVox;
 
@@ -24,13 +26,32 @@ uint32_t lipSyncLastFrameAt = 0;
 enum class ServoStartupChoice {
   KeepPosition,
   GoHome,
+  Calibrate,
 };
 
 enum class ServoPromptButton {
   None,
   Keep,
   Home,
+  Calibrate,
 };
+
+M5Canvas& startupCanvas() {
+  static M5Canvas canvas(&M5.Display);
+  static int16_t canvasWidth = 0;
+  static int16_t canvasHeight = 0;
+
+  const int16_t width = M5.Display.width();
+  const int16_t height = M5.Display.height();
+  if (canvasWidth != width || canvasHeight != height) {
+    canvas.deleteSprite();
+    canvas.setColorDepth(16);
+    canvas.createSprite(width, height);
+    canvasWidth = width;
+    canvasHeight = height;
+  }
+  return canvas;
+}
 
 void setLipSyncLevel(int level) {
   targetMouthOpen = constrain(level, 0, 100);
@@ -174,28 +195,36 @@ ServoPromptButton servoPromptButtonAt(int16_t x, int16_t y) {
   if (y < kButtonTop || y > kButtonBottom) {
     return ServoPromptButton::None;
   }
-  return x < M5.Display.width() / 2
-             ? ServoPromptButton::Keep
-             : ServoPromptButton::Home;
+  const int16_t third = M5.Display.width() / 3;
+  if (x < third) {
+    return ServoPromptButton::Keep;
+  }
+  if (x < third * 2) {
+    return ServoPromptButton::Home;
+  }
+  return ServoPromptButton::Calibrate;
 }
 
 void drawServoStartupPrompt(ServoPromptButton pressed) {
-  auto& display = M5.Display;
+  auto& display = startupCanvas();
   const int16_t width = display.width();
-  constexpr int16_t kMargin = 14;
-  constexpr int16_t kGap = 10;
+  constexpr int16_t kMargin = 8;
+  constexpr int16_t kGap = 6;
   constexpr int16_t kButtonTop = 160;
   constexpr int16_t kButtonHeight = 66;
-  const int16_t buttonWidth = (width - kMargin * 2 - kGap) / 2;
+  const int16_t buttonWidth =
+      (width - kMargin * 2 - kGap * 2) / 3;
   const int16_t keepX = kMargin;
   const int16_t homeX = keepX + buttonWidth + kGap;
+  const int16_t calibrateX = homeX + buttonWidth + kGap;
 
   const uint16_t keepColor =
       pressed == ServoPromptButton::Keep ? 0x7800 : 0x4208;
   const uint16_t homeColor =
       pressed == ServoPromptButton::Home ? 0x03E0 : 0x0260;
+  const uint16_t calibrateColor =
+      pressed == ServoPromptButton::Calibrate ? 0x001F : 0x0010;
 
-  display.startWrite();
   display.fillScreen(TFT_BLACK);
   display.setFont(&fonts::Font2);
   display.setTextDatum(middle_center);
@@ -218,17 +247,27 @@ void drawServoStartupPrompt(ServoPromptButton pressed) {
       homeX, kButtonTop, buttonWidth, kButtonHeight, 10, homeColor);
   display.drawRoundRect(
       homeX, kButtonTop, buttonWidth, kButtonHeight, 10, TFT_WHITE);
+  display.fillRoundRect(
+      calibrateX, kButtonTop, buttonWidth, kButtonHeight, 10,
+      calibrateColor);
+  display.drawRoundRect(
+      calibrateX, kButtonTop, buttonWidth, kButtonHeight, 10,
+      TFT_WHITE);
 
   display.setTextColor(TFT_WHITE);
   display.setTextSize(2);
   display.drawString("NO", keepX + buttonWidth / 2, kButtonTop + 22);
   display.drawString("OK", homeX + buttonWidth / 2, kButtonTop + 22);
+  display.drawString(
+      "CAL", calibrateX + buttonWidth / 2, kButtonTop + 22);
   display.setTextSize(1);
   display.drawString(
       "KEEP", keepX + buttonWidth / 2, kButtonTop + 49);
   display.drawString(
       "HOME", homeX + buttonWidth / 2, kButtonTop + 49);
-  display.endWrite();
+  display.drawString(
+      "ALL", calibrateX + buttonWidth / 2, kButtonTop + 49);
+  display.pushSprite(0, 0);
 }
 
 ServoStartupChoice askServoStartupChoice() {
@@ -274,6 +313,11 @@ ServoStartupChoice askServoStartupChoice() {
         avatarFace.resumeDrawing();
         avatarFace.resetToDefault();
         return ServoStartupChoice::GoHome;
+      }
+      if (selected == ServoPromptButton::Calibrate) {
+        avatarFace.resumeDrawing();
+        avatarFace.resetToDefault();
+        return ServoStartupChoice::Calibrate;
       }
     }
 
@@ -365,6 +409,16 @@ void setup() {
   M5StackChan.setServoPowerEnabled(false);
   M5StackChan.showRgbColor(0, 0, 0);
   Serial.println("Servo torque and power disabled");
+  calibrationController.load();
+  const auto& savedCalibration = calibrationController.data();
+  Serial.printf(
+      "Calibration servo=%d imu=%d yaw=[%d,%d] pitch=[%d,%d] "
+      "level=(%.3f,%.3f)\n",
+      savedCalibration.servoValid, savedCalibration.imuLevelValid,
+      savedCalibration.yawMin, savedCalibration.yawMax,
+      savedCalibration.pitchMin, savedCalibration.pitchMax,
+      savedCalibration.levelRollDeg,
+      savedCalibration.levelPitchDeg);
 
   if (M5.Display.width() < M5.Display.height()) {
     M5.Display.setRotation(1);
@@ -384,6 +438,9 @@ void setup() {
   if (servoChoice == ServoStartupChoice::GoHome) {
     Serial.println("Servo startup choice: HOME");
     moveServoToHomeSafely();
+  } else if (servoChoice == ServoStartupChoice::Calibrate) {
+    Serial.println("Servo startup choice: CALIBRATE");
+    calibrationController.run(avatarFace);
   } else {
     Serial.println("Servo startup choice: KEEP");
     M5StackChan.Motion.setTorqueEnabled(false);
