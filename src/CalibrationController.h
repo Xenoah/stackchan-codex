@@ -29,7 +29,7 @@ class CalibrationController {
   bool calibrateImuLevel();
   bool moveAndVerify(
       const char* title, int yaw, int pitch, int* measuredYaw,
-      int* measuredPitch);
+      int* measuredPitch, bool requireTarget);
   void saveServoCalibration();
   void saveImuCalibration();
   void stopServos();

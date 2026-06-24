@@ -17,6 +17,10 @@ constexpr int kSweepSpeed = 120;
 constexpr int kPositionTolerance = 80;
 constexpr uint32_t kMoveTimeoutMs = 30000;
 constexpr uint32_t kPositionSettleMs = 300;
+constexpr uint32_t kMinMoveWaitMs = 1200;
+constexpr uint32_t kPositionStableMs = 800;
+constexpr int kStablePositionDelta = 10;
+constexpr int kMinimumAcceptedTravel = 80;
 constexpr uint32_t kImuCalibrationMs = 8000;
 constexpr size_t kImuSampleCount = 300;
 
@@ -362,27 +366,27 @@ bool CalibrationController::calibrateServos() {
 
   if (!moveAndVerify(
           "SERVO 3/7 YAW LEFT", kYawMin, kPitchMin,
-          &yawAtMin, &unused)) {
+          &yawAtMin, &unused, false)) {
     return false;
   }
   if (!moveAndVerify(
           "SERVO 4/7 YAW RIGHT", kYawMax, kPitchMin,
-          &yawAtMax, &unused)) {
+          &yawAtMax, &unused, false)) {
     return false;
   }
   if (!moveAndVerify(
           "SERVO 5/7 CENTER", 0, kPitchMin,
-          &unused, &pitchAtMin)) {
+          &unused, &pitchAtMin, false)) {
     return false;
   }
   if (!moveAndVerify(
           "SERVO 6/7 PITCH UP", 0, kPitchMax,
-          &unused, &pitchAtMax)) {
+          &unused, &pitchAtMax, false)) {
     return false;
   }
   if (!moveAndVerify(
           "SERVO 7/7 HOME", 0, 0,
-          &unused, &pitchAtMin)) {
+          &unused, &pitchAtMin, true)) {
     return false;
   }
 
@@ -403,15 +407,21 @@ bool CalibrationController::calibrateServos() {
 
 bool CalibrationController::moveAndVerify(
     const char* title, int yaw, int pitch, int* measuredYaw,
-    int* measuredPitch) {
+    int* measuredPitch, bool requireTarget) {
   M5StackChan.Motion.move(yaw, pitch, kSweepSpeed);
   const uint32_t startedAt = millis();
   uint32_t lastDrawAt = 0;
   uint32_t reachedSince = 0;
+  uint32_t stableSince = 0;
+  const auto startAngles = M5StackChan.Motion.getCurrentAngles();
+  auto lastStableAngles = startAngles;
+  const int plannedTravel =
+      max(abs(startAngles.x - yaw), abs(startAngles.y - pitch));
 
   while (true) {
     M5StackChan.update();
     const uint32_t now = millis();
+    const uint32_t elapsed = now - startedAt;
     const auto current = M5StackChan.Motion.getCurrentAngles();
 
     if (now - lastDrawAt >= 120) {
@@ -430,7 +440,30 @@ bool CalibrationController::moveAndVerify(
       reachedSince = 0;
     }
 
-    if (now - startedAt > 300 && screenTouched()) {
+    if (abs(current.x - lastStableAngles.x) > kStablePositionDelta ||
+        abs(current.y - lastStableAngles.y) > kStablePositionDelta) {
+      lastStableAngles = current;
+      stableSince = now;
+    } else if (stableSince == 0) {
+      stableSince = now;
+    }
+
+    const int actualTravel =
+        max(abs(current.x - startAngles.x),
+            abs(current.y - startAngles.y));
+    const bool movedEnough =
+        plannedTravel <= kMinimumAcceptedTravel ||
+        actualTravel >= kMinimumAcceptedTravel;
+
+    if (!requireTarget && elapsed >= kMinMoveWaitMs &&
+        movedEnough && now - stableSince >= kPositionStableMs) {
+      Serial.printf(
+          "%s settled before target target=(%d,%d) actual=(%d,%d)\n",
+          title, yaw, pitch, current.x, current.y);
+      break;
+    }
+
+    if (elapsed > 300 && screenTouched()) {
       Serial.printf("%s emergency stop\n", title);
       M5StackChan.Motion.stop();
       stopServos();
@@ -438,7 +471,7 @@ bool CalibrationController::moveAndVerify(
       return false;
     }
 
-    if (now - startedAt >= kMoveTimeoutMs) {
+    if (elapsed >= kMoveTimeoutMs) {
       Serial.printf("%s timeout\n", title);
       M5StackChan.Motion.stop();
       stopServos();
@@ -455,7 +488,7 @@ bool CalibrationController::moveAndVerify(
       "%s target=(%d,%d) actual=(%d,%d)\n",
       title, yaw, pitch, actual.x, actual.y);
 
-  if (!nearTarget(actual.x, actual.y, yaw, pitch)) {
+  if (requireTarget && !nearTarget(actual.x, actual.y, yaw, pitch)) {
     stopServos();
     waitForConfirmation(
         "SERVO ERROR",
