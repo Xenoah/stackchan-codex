@@ -18,6 +18,8 @@
 - BMI270ジャイロ校正と、300サンプル平均による水平Roll/Pitchゼロ点保存
 - 設定画面の音声合成設定をTTS表記へ一般化し、`voicevox_compatible` / `simple_wav` を選択可能に変更
 - Speaker / Style IDを文字列保存へ変更し、AivisSpeechなどの大きなIDに対応
+- 画面下端から上スワイプで開くモード選択メニューを追加
+- デフォルト `LOCAL LLM` モードと、IMU/PID制御で水平維持する `LEVEL HOLD` モードを追加
 
 ## [β0.2.5] - 2026-06-23
 

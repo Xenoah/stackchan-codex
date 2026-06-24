@@ -1,5 +1,6 @@
 #include <M5Unified.h>
 #include <esp_system.h>
+#include <math.h>
 
 #include "AvatarFaceController.h"
 #include "CalibrationController.h"
@@ -34,6 +35,43 @@ enum class ServoPromptButton {
   Yes,
 };
 
+enum class AppMode {
+  LocalLlm,
+  LevelHold,
+};
+
+enum class ModeMenuButton {
+  None,
+  LocalLlm,
+  LevelHold,
+  Close,
+};
+
+struct PidController {
+  float kp = 0.0f;
+  float ki = 0.0f;
+  float kd = 0.0f;
+  float integral = 0.0f;
+  float previousError = 0.0f;
+  bool hasPrevious = false;
+
+  void reset() {
+    integral = 0.0f;
+    previousError = 0.0f;
+    hasPrevious = false;
+  }
+
+  float update(float error, float dt) {
+    integral += error * dt;
+    integral = constrain(integral, -80.0f, 80.0f);
+    const float derivative =
+        hasPrevious && dt > 0.0f ? (error - previousError) / dt : 0.0f;
+    previousError = error;
+    hasPrevious = true;
+    return kp * error + ki * integral + kd * derivative;
+  }
+};
+
 TtsEngineType ttsEngineTypeFromString(const String& value) {
   return value == "simple_wav" ? TtsEngineType::SimpleWav
                                : TtsEngineType::VoiceVoxCompatible;
@@ -54,6 +92,139 @@ M5Canvas& startupCanvas() {
     canvasHeight = height;
   }
   return canvas;
+}
+
+constexpr uint32_t LEVEL_HOLD_UPDATE_INTERVAL_MS = 80;
+constexpr int LEVEL_HOLD_SERVO_SPEED = 260;
+
+AppMode currentMode = AppMode::LocalLlm;
+bool levelHoldActive = false;
+uint32_t levelHoldLastUpdateAt = 0;
+PidController levelHoldRollPid{8.0f, 0.25f, 1.4f};
+PidController levelHoldPitchPid{10.0f, 0.3f, 1.8f};
+
+bool modeMenuOpen = false;
+bool displayWasTouching = false;
+int16_t displayTouchStartX = 0;
+int16_t displayTouchStartY = 0;
+int16_t displayTouchLastX = 0;
+int16_t displayTouchLastY = 0;
+uint32_t displayTouchStartedAt = 0;
+ModeMenuButton modeMenuPressed = ModeMenuButton::None;
+
+const char* appModeName(AppMode mode) {
+  return mode == AppMode::LevelHold ? "LEVEL HOLD" : "LOCAL LLM";
+}
+
+void resetLevelHoldPid() {
+  levelHoldRollPid.reset();
+  levelHoldPitchPid.reset();
+  levelHoldLastUpdateAt = millis();
+}
+
+bool startLevelHoldMode() {
+  const auto& calibration = calibrationController.data();
+  if (!calibration.servoValid || !calibration.imuLevelValid ||
+      !M5.Imu.isEnabled()) {
+    avatarFace.setExpression(m5avatar::Expression::Doubt);
+    avatarFace.showStatus("CAL REQUIRED", 2500);
+    avatarFace.returnToDefaultAfter(2500);
+    M5StackChan.showRgbColor(96, 48, 0);
+    return false;
+  }
+
+  M5StackChan.setServoPowerEnabled(true);
+  delay(150);
+  M5StackChan.Motion.setAutoAngleSyncEnabled(true);
+  M5StackChan.Motion.setAutoTorqueReleaseEnabled(false);
+  M5StackChan.Motion.setTorqueEnabled(true);
+  delay(80);
+  M5StackChan.Motion.move(0, 0, LEVEL_HOLD_SERVO_SPEED);
+  delay(120);
+  M5StackChan.Motion.setAutoAngleSyncEnabled(false);
+  resetLevelHoldPid();
+  levelHoldActive = true;
+  currentMode = AppMode::LevelHold;
+  avatarFace.resetToDefault();
+  avatarFace.showStatus("LEVEL HOLD", 1800);
+  M5StackChan.showRgbColor(0, 64, 96);
+  Serial.println("Mode changed: LEVEL HOLD");
+  return true;
+}
+
+void stopLevelHoldMode() {
+  if (!levelHoldActive) {
+    return;
+  }
+  M5StackChan.Motion.stop();
+  delay(50);
+  M5StackChan.Motion.setTorqueEnabled(false);
+  M5StackChan.Motion.setAutoAngleSyncEnabled(true);
+  M5StackChan.Motion.setAutoTorqueReleaseEnabled(true);
+  M5StackChan.setServoPowerEnabled(false);
+  levelHoldActive = false;
+}
+
+void activateMode(AppMode mode) {
+  if (mode == AppMode::LevelHold) {
+    if (!startLevelHoldMode()) {
+      currentMode = AppMode::LocalLlm;
+    }
+    return;
+  }
+
+  stopLevelHoldMode();
+  currentMode = AppMode::LocalLlm;
+  avatarFace.resetToDefault();
+  avatarFace.showStatus("LOCAL LLM", 1800);
+  M5StackChan.showRgbColor(0, 48, 0);
+  Serial.println("Mode changed: LOCAL LLM");
+}
+
+void updateLevelHoldMode() {
+  if (!levelHoldActive) {
+    return;
+  }
+
+  const uint32_t now = millis();
+  if (now - levelHoldLastUpdateAt < LEVEL_HOLD_UPDATE_INTERVAL_MS) {
+    return;
+  }
+  const float dt = (now - levelHoldLastUpdateAt) / 1000.0f;
+  levelHoldLastUpdateAt = now;
+
+  if (M5.Imu.update() == m5::IMU_Class::sensor_mask_none) {
+    return;
+  }
+
+  float ax = 0.0f;
+  float ay = 0.0f;
+  float az = 0.0f;
+  M5.Imu.getAccel(&ax, &ay, &az);
+
+  const auto& calibration = calibrationController.data();
+  const float rollDeg =
+      atan2f(ay, az) * 180.0f / PI - calibration.levelRollDeg;
+  const float pitchDeg =
+      atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / PI -
+      calibration.levelPitchDeg;
+
+  const int yawCorrection =
+      static_cast<int>(roundf(levelHoldRollPid.update(rollDeg, dt)));
+  const int pitchCorrection =
+      static_cast<int>(roundf(-levelHoldPitchPid.update(pitchDeg, dt)));
+
+  const int yawTarget = constrain(
+      yawCorrection, calibration.yawMin, calibration.yawMax);
+  const int pitchTarget = constrain(
+      pitchCorrection, calibration.pitchMin, calibration.pitchMax);
+
+  M5StackChan.Motion.move(
+      yawTarget, pitchTarget, LEVEL_HOLD_SERVO_SPEED);
+}
+
+void updateActiveMode() {
+  updateLevelHoldMode();
 }
 
 void setLipSyncLevel(int level) {
@@ -103,6 +274,7 @@ void serviceApp() {
   configPortal.update();
   avatarFace.update();
   updateLipSync();
+  updateActiveMode();
 }
 
 void speakConfiguredText() {
@@ -174,6 +346,143 @@ void handleTopTouch() {
     ignoreNextTopClick = false;
     avatarFace.toggleShowcase();
   }
+}
+
+ModeMenuButton modeMenuButtonAt(int16_t x, int16_t y) {
+  const int16_t width = M5.Display.width();
+  const int16_t rowX = 18;
+  const int16_t rowW = width - rowX * 2;
+
+  if (x < rowX || x > rowX + rowW) {
+    return ModeMenuButton::None;
+  }
+  if (y >= 64 && y <= 110) {
+    return ModeMenuButton::LocalLlm;
+  }
+  if (y >= 122 && y <= 168) {
+    return ModeMenuButton::LevelHold;
+  }
+  if (y >= 188 && y <= 226) {
+    return ModeMenuButton::Close;
+  }
+  return ModeMenuButton::None;
+}
+
+void drawModeMenu(ModeMenuButton pressed) {
+  auto& display = startupCanvas();
+  const int16_t width = display.width();
+  constexpr int16_t rowX = 18;
+  const int16_t rowW = width - rowX * 2;
+
+  display.fillScreen(TFT_BLACK);
+  display.setFont(&fonts::Font2);
+  display.setTextDatum(middle_center);
+  display.setTextSize(2);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.drawString("MODE", width / 2, 28);
+
+  display.setTextSize(1);
+  display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  display.drawString(appModeName(currentMode), width / 2, 50);
+
+  auto drawRow = [&](ModeMenuButton button, const char* label,
+                     int16_t y, uint16_t color) {
+    const bool selected =
+        (button == ModeMenuButton::LocalLlm &&
+         currentMode == AppMode::LocalLlm) ||
+        (button == ModeMenuButton::LevelHold &&
+         currentMode == AppMode::LevelHold);
+    const bool isPressed = pressed == button;
+    const uint16_t fill =
+        isPressed ? color : (selected ? 0x2945 : 0x2104);
+    display.fillRoundRect(rowX, y, rowW, 46, 8, fill);
+    display.drawRoundRect(rowX, y, rowW, 46, 8,
+                          selected ? TFT_YELLOW : TFT_DARKGREY);
+    display.setTextColor(TFT_WHITE, fill);
+    display.setTextSize(2);
+    display.drawString(label, width / 2, y + 23);
+  };
+
+  drawRow(ModeMenuButton::LocalLlm, "LOCAL LLM", 64, 0x03E0);
+  drawRow(ModeMenuButton::LevelHold, "LEVEL HOLD", 122, 0x035F);
+  drawRow(ModeMenuButton::Close, "CLOSE", 188, 0x4208);
+  display.pushSprite(0, 0);
+}
+
+void openModeMenu() {
+  if (modeMenuOpen) {
+    return;
+  }
+  modeMenuOpen = true;
+  modeMenuPressed = ModeMenuButton::None;
+  avatarFace.pauseDrawing();
+  delay(20);
+  drawModeMenu(modeMenuPressed);
+}
+
+void closeModeMenu() {
+  if (!modeMenuOpen) {
+    return;
+  }
+  modeMenuOpen = false;
+  modeMenuPressed = ModeMenuButton::None;
+  avatarFace.resumeDrawing();
+  avatarFace.resetToDefault();
+}
+
+bool handleDisplayTouch() {
+  int16_t x = 0;
+  int16_t y = 0;
+  const bool touching = M5.Display.getTouch(&x, &y);
+
+  if (modeMenuOpen) {
+    const ModeMenuButton current =
+        touching ? modeMenuButtonAt(x, y) : ModeMenuButton::None;
+    if (touching && current != modeMenuPressed) {
+      modeMenuPressed = current;
+      drawModeMenu(modeMenuPressed);
+    }
+    if (!touching && displayWasTouching) {
+      const ModeMenuButton selected = modeMenuPressed;
+      closeModeMenu();
+      if (selected == ModeMenuButton::LocalLlm) {
+        activateMode(AppMode::LocalLlm);
+      } else if (selected == ModeMenuButton::LevelHold) {
+        activateMode(AppMode::LevelHold);
+      }
+    }
+    displayWasTouching = touching;
+    return true;
+  }
+
+  if (touching && !displayWasTouching) {
+    displayTouchStartX = x;
+    displayTouchStartY = y;
+    displayTouchLastX = x;
+    displayTouchLastY = y;
+    displayTouchStartedAt = millis();
+  } else if (touching) {
+    displayTouchLastX = x;
+    displayTouchLastY = y;
+  } else if (!touching && displayWasTouching) {
+    const int16_t height = M5.Display.height();
+    const int16_t verticalTravel =
+        displayTouchStartY - displayTouchLastY;
+    const int16_t horizontalTravel =
+        abs(displayTouchLastX - displayTouchStartX);
+    const uint32_t duration = millis() - displayTouchStartedAt;
+    if (displayTouchStartY >= height - 44 &&
+        verticalTravel >= 70 &&
+        horizontalTravel <= 100 &&
+        duration <= 1200) {
+      openModeMenu();
+      displayWasTouching = false;
+      return true;
+    }
+  }
+
+  displayWasTouching = touching;
+  return false;
 }
 
 void drawBootFallbackFace() {
@@ -381,14 +690,20 @@ void setup() {
                 configPortal.config().ttsSpeaker.c_str());
 
   avatarFace.resetToDefault();
-  avatarFace.showStatus("READY");
+  avatarFace.showStatus("LOCAL LLM");
   M5StackChan.showRgbColor(0, 48, 0);
+  Serial.println("Mode default: LOCAL LLM");
 }
 
 void loop() {
   serviceApp();
 
   if (configPortal.isPortalActive()) {
+    delay(5);
+    return;
+  }
+
+  if (handleDisplayTouch()) {
     delay(5);
     return;
   }
