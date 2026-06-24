@@ -10,7 +10,7 @@
 AvatarFaceController avatarFace;
 CalibrationController calibrationController;
 ConfigPortal configPortal;
-VoiceVoxClient voiceVox;
+TtsClient ttsClient;
 
 constexpr uint32_t LIP_FRAME_INTERVAL_MS = 30;
 constexpr uint32_t LIP_INPUT_TIMEOUT_MS = 220;
@@ -35,6 +35,11 @@ enum class ServoPromptButton {
   Home,
   Calibrate,
 };
+
+TtsEngineType ttsEngineTypeFromString(const String& value) {
+  return value == "simple_wav" ? TtsEngineType::SimpleWav
+                               : TtsEngineType::VoiceVoxCompatible;
+}
 
 M5Canvas& startupCanvas() {
   static M5Canvas canvas(&M5.Display);
@@ -113,16 +118,18 @@ void speakConfiguredText() {
 
   speaking = true;
   avatarFace.setExpression(m5avatar::Expression::Happy);
-  avatarFace.showStatus("VOICEVOX", 900);
+  avatarFace.showStatus("TTS", 900);
   M5StackChan.showRgbColor(0, 0, 96);
 
   const AppConfig& appConfig = configPortal.config();
-  VoiceVoxConfig voiceConfig;
-  voiceConfig.host = appConfig.voiceVoxHost;
-  voiceConfig.port = appConfig.voiceVoxPort;
-  voiceConfig.speaker = appConfig.voiceVoxSpeaker;
+  TtsConfig ttsConfig;
+  ttsConfig.host = appConfig.ttsHost;
+  ttsConfig.port = appConfig.ttsPort;
+  ttsConfig.speaker = appConfig.ttsSpeaker;
+  ttsConfig.engineType =
+      ttsEngineTypeFromString(appConfig.ttsEngineType);
 
-  const bool success = voiceVox.speak(voiceConfig, appConfig.speechText);
+  const bool success = ttsClient.speak(ttsConfig, appConfig.speechText);
   stopLipSync();
 
   if (success) {
@@ -130,10 +137,10 @@ void speakConfiguredText() {
     M5StackChan.showRgbColor(0, 48, 0);
   } else {
     avatarFace.setExpression(m5avatar::Expression::Angry);
-    avatarFace.showStatus("VOICEVOX ERROR", 2500);
+    avatarFace.showStatus("TTS ERROR", 2500);
     avatarFace.returnToDefaultAfter(2500);
     M5StackChan.showRgbColor(96, 0, 0);
-    Serial.printf("VOICEVOX error: %s\n", voiceVox.lastError().c_str());
+    Serial.printf("TTS error: %s\n", ttsClient.lastError().c_str());
   }
 
   speaking = false;
@@ -450,7 +457,7 @@ void setup() {
 
   M5.Speaker.begin();
   M5.Speaker.setVolume(160);
-  voiceVox.setCallbacks(setLipSyncLevel, serviceApp);
+  ttsClient.setCallbacks(setLipSyncLevel, serviceApp);
 
   Serial.println("Starting network configuration...");
   if (!configPortal.begin()) {
@@ -464,10 +471,11 @@ void setup() {
 
   Serial.printf("StackChan IP: %s\n",
                 configPortal.localIp().toString().c_str());
-  Serial.printf("VOICEVOX: http://%s:%u speaker=%d\n",
-                configPortal.config().voiceVoxHost.c_str(),
-                configPortal.config().voiceVoxPort,
-                configPortal.config().voiceVoxSpeaker);
+  Serial.printf("TTS: %s http://%s:%u speaker=%s\n",
+                configPortal.config().ttsEngineType.c_str(),
+                configPortal.config().ttsHost.c_str(),
+                configPortal.config().ttsPort,
+                configPortal.config().ttsSpeaker.c_str());
 
   avatarFace.resetToDefault();
   avatarFace.showStatus("READY");

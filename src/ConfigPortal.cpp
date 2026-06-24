@@ -27,6 +27,17 @@ String htmlEscape(const String& value) {
   return escaped;
 }
 
+String sanitizedTtsEngineType(const String& value) {
+  return value == "simple_wav" ? "simple_wav" : "voicevox_compatible";
+}
+
+String selectedAttribute(const String& value, const char* option) {
+  if (value == option) {
+    return " selected";
+  }
+  return "";
+}
+
 }  // namespace
 
 bool ConfigPortal::begin() {
@@ -70,12 +81,15 @@ void ConfigPortal::load() {
   preferences_.begin("stackchan", true);
   config_.wifiSsid = preferences_.getString("ssid", "");
   config_.wifiPassword = preferences_.getString("password", "");
-  config_.voiceVoxHost =
-      preferences_.getString("vv_host", config_.voiceVoxHost);
-  config_.voiceVoxPort =
-      preferences_.getUShort("vv_port", config_.voiceVoxPort);
-  config_.voiceVoxSpeaker =
-      preferences_.getInt("vv_speaker", config_.voiceVoxSpeaker);
+  config_.ttsHost = preferences_.getString(
+      "tts_host", preferences_.getString("vv_host", config_.ttsHost));
+  config_.ttsPort = preferences_.getUShort(
+      "tts_port", preferences_.getUShort("vv_port", config_.ttsPort));
+  config_.ttsSpeaker = preferences_.getString(
+      "tts_speaker",
+      String(preferences_.getInt("vv_speaker", config_.ttsSpeaker.toInt())));
+  config_.ttsEngineType = sanitizedTtsEngineType(
+      preferences_.getString("tts_engine", config_.ttsEngineType));
   config_.speechText =
       preferences_.getString("speech", config_.speechText);
   preferences_.end();
@@ -85,9 +99,10 @@ void ConfigPortal::save() {
   preferences_.begin("stackchan", false);
   preferences_.putString("ssid", config_.wifiSsid);
   preferences_.putString("password", config_.wifiPassword);
-  preferences_.putString("vv_host", config_.voiceVoxHost);
-  preferences_.putUShort("vv_port", config_.voiceVoxPort);
-  preferences_.putInt("vv_speaker", config_.voiceVoxSpeaker);
+  preferences_.putString("tts_host", config_.ttsHost);
+  preferences_.putUShort("tts_port", config_.ttsPort);
+  preferences_.putString("tts_speaker", config_.ttsSpeaker);
+  preferences_.putString("tts_engine", config_.ttsEngineType);
   preferences_.putString("speech", config_.speechText);
   preferences_.end();
 }
@@ -132,11 +147,16 @@ void ConfigPortal::registerRoutes() {
     if (!submittedPassword.isEmpty()) {
       config_.wifiPassword = submittedPassword;
     }
-    config_.voiceVoxHost = server_.arg("voice_host");
-    config_.voiceVoxPort =
-        constrain(server_.arg("voice_port").toInt(), 1, 65535);
-    config_.voiceVoxSpeaker =
-        constrain(server_.arg("speaker").toInt(), 0, 99999);
+    config_.ttsHost = server_.arg("tts_host");
+    config_.ttsPort =
+        constrain(server_.arg("tts_port").toInt(), 1, 65535);
+    config_.ttsSpeaker = server_.arg("speaker");
+    config_.ttsSpeaker.trim();
+    if (config_.ttsSpeaker.isEmpty()) {
+      config_.ttsSpeaker = "3";
+    }
+    config_.ttsEngineType =
+        sanitizedTtsEngineType(server_.arg("tts_engine"));
     config_.speechText = server_.arg("speech");
     save();
 
@@ -183,21 +203,34 @@ String ConfigPortal::pageHtml(const String& message) {
   html += F(
       "<input type='password' name='password' "
       "placeholder='変更しない場合は空欄'>");
-  html += F("</label><label>VOICEVOX Engine IP / host");
-  html += "<input name='voice_host' value='" +
-          htmlEscape(config_.voiceVoxHost) + "'>";
-  html += F("</label><label>VOICEVOX port");
-  html += "<input type='number' name='voice_port' value='" +
-          String(config_.voiceVoxPort) + "'>";
-  html += F("</label><label>VOICEVOX style ID（ずんだもん ノーマル: 3）");
-  html += "<input type='number' name='speaker' value='" +
-          String(config_.voiceVoxSpeaker) + "'>";
+  html += F("</label><label>TTS Engine Type");
+  html += F(
+      "<select name='tts_engine' style='box-sizing:border-box;width:100%;"
+      "padding:10px;margin-top:5px;border-radius:8px;border:1px solid #555;"
+      "background:#222;color:#fff'>");
+  html += "<option value='voicevox_compatible'" +
+          selectedAttribute(config_.ttsEngineType,
+                            "voicevox_compatible") +
+          ">voicevox_compatible</option>";
+  html += "<option value='simple_wav'" +
+          selectedAttribute(config_.ttsEngineType, "simple_wav") +
+          ">simple_wav</option>";
+  html += F("</select>");
+  html += F("</label><label>TTS Host");
+  html += "<input name='tts_host' value='" +
+          htmlEscape(config_.ttsHost) + "'>";
+  html += F("</label><label>TTS Port");
+  html += "<input type='number' name='tts_port' value='" +
+          String(config_.ttsPort) + "'>";
+  html += F("</label><label>Speaker / Style ID（ずんだもん ノーマル: 3）");
+  html += "<input name='speaker' value='" +
+          htmlEscape(config_.ttsSpeaker) + "'>";
   html += F("</label><label>Aボタンで話す文章");
   html += "<textarea name='speech' rows='4'>" +
           htmlEscape(config_.speechText) + "</textarea>";
   html += F("</label><button type='submit'>保存して再起動</button></form>"
-            "<p>VOICEVOX Engineは同じLANで 0.0.0.0:50021 を待ち受ける"
-            "設定にしてください。</p></body></html>");
+            "<p>TTSサーバーは同じLANからHTTP接続できるように"
+            "待ち受ける設定にしてください。</p></body></html>");
   return html;
 }
 

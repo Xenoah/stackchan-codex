@@ -26,20 +26,28 @@ uint32_t readLe32(const uint8_t* data) {
 
 }  // namespace
 
-void VoiceVoxClient::setCallbacks(LipSyncCallback lipSync,
-                                  ServiceCallback serviceCallback) {
+void TtsClient::setCallbacks(LipSyncCallback lipSync,
+                             ServiceCallback serviceCallback) {
   lipSync_ = lipSync;
   service_ = serviceCallback;
 }
 
-bool VoiceVoxClient::speak(const VoiceVoxConfig& config, const String& text) {
+bool TtsClient::speak(const TtsConfig& config, const String& text) {
   lastError_ = "";
   if (WiFi.status() != WL_CONNECTED) {
     lastError_ = "Wi-Fi is not connected";
     return false;
   }
 
-  const String speaker = String(config.speaker);
+  if (config.engineType == TtsEngineType::SimpleWav) {
+    return speakSimpleWav(config, text);
+  }
+  return speakVoiceVoxCompatible(config, text);
+}
+
+bool TtsClient::speakVoiceVoxCompatible(
+    const TtsConfig& config, const String& text) {
+  const String speaker = urlEncode(config.speaker);
   const String queryUrl =
       endpoint(config, "/audio_query") + "?speaker=" + speaker +
       "&text=" + urlEncode(text);
@@ -94,16 +102,43 @@ bool VoiceVoxClient::speak(const VoiceVoxConfig& config, const String& text) {
   return played;
 }
 
-const String& VoiceVoxClient::lastError() const {
+bool TtsClient::speakSimpleWav(
+    const TtsConfig& config, const String& text) {
+  HTTPClient synthesisHttp;
+  synthesisHttp.setConnectTimeout(kNetworkTimeoutMs);
+  synthesisHttp.setTimeout(kNetworkTimeoutMs);
+  if (!synthesisHttp.begin(endpoint(config, "/synthesis"))) {
+    lastError_ = "simple_wav synthesis begin failed";
+    return false;
+  }
+
+  synthesisHttp.addHeader("Content-Type", "text/plain; charset=utf-8");
+  synthesisHttp.addHeader("Accept", "audio/wav");
+  const int synthesisStatus = synthesisHttp.POST(
+      reinterpret_cast<uint8_t*>(const_cast<char*>(text.c_str())),
+      text.length());
+
+  if (synthesisStatus != HTTP_CODE_OK) {
+    lastError_ = "simple_wav synthesis HTTP " + String(synthesisStatus);
+    synthesisHttp.end();
+    return false;
+  }
+
+  const bool played = playWavStream(synthesisHttp);
+  synthesisHttp.end();
+  return played;
+}
+
+const String& TtsClient::lastError() const {
   return lastError_;
 }
 
-String VoiceVoxClient::endpoint(const VoiceVoxConfig& config,
-                                const char* path) const {
+String TtsClient::endpoint(const TtsConfig& config,
+                           const char* path) const {
   return "http://" + config.host + ":" + String(config.port) + path;
 }
 
-String VoiceVoxClient::urlEncode(const String& value) const {
+String TtsClient::urlEncode(const String& value) const {
   static const char hex[] = "0123456789ABCDEF";
   String encoded;
   encoded.reserve(value.length() * 3);
@@ -125,7 +160,7 @@ String VoiceVoxClient::urlEncode(const String& value) const {
   return encoded;
 }
 
-bool VoiceVoxClient::playWavStream(HTTPClient& http) {
+bool TtsClient::playWavStream(HTTPClient& http) {
   WiFiClient* stream = http.getStreamPtr();
   if (stream == nullptr) {
     lastError_ = "synthesis stream unavailable";
@@ -246,8 +281,8 @@ bool VoiceVoxClient::playWavStream(HTTPClient& http) {
   return true;
 }
 
-bool VoiceVoxClient::readExact(WiFiClient& stream, uint8_t* destination,
-                               size_t length, uint32_t timeoutMs) {
+bool TtsClient::readExact(WiFiClient& stream, uint8_t* destination,
+                          size_t length, uint32_t timeoutMs) {
   size_t offset = 0;
   uint32_t lastProgress = millis();
 
@@ -273,8 +308,8 @@ bool VoiceVoxClient::readExact(WiFiClient& stream, uint8_t* destination,
   return true;
 }
 
-bool VoiceVoxClient::skipBytes(WiFiClient& stream, size_t length,
-                               uint32_t timeoutMs) {
+bool TtsClient::skipBytes(WiFiClient& stream, size_t length,
+                          uint32_t timeoutMs) {
   uint8_t scratch[64];
   while (length > 0) {
     const size_t count = min(length, sizeof(scratch));
@@ -286,7 +321,7 @@ bool VoiceVoxClient::skipBytes(WiFiClient& stream, size_t length,
   return true;
 }
 
-void VoiceVoxClient::service() {
+void TtsClient::service() {
   if (service_ != nullptr) {
     service_();
   }

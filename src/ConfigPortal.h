@@ -8,9 +8,10 @@
 struct AppConfig {
   String wifiSsid;
   String wifiPassword;
-  String voiceVoxHost = "192.168.1.2";
-  uint16_t voiceVoxPort = 50021;
-  int voiceVoxSpeaker = 3;
+  String ttsHost = "192.168.1.2";
+  uint16_t ttsPort = 50021;
+  String ttsSpeaker = "3";
+  String ttsEngineType = "voicevox_compatible";
   String speechText =
       "こんにちは。ぼく、ずんだもんなのだ。スタックチャンでお話しできるようになったのだ。";
 };
