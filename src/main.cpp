@@ -72,6 +72,23 @@ struct PidController {
   }
 };
 
+float applyDeadband(float value, float deadband) {
+  if (fabsf(value) <= deadband) {
+    return 0.0f;
+  }
+  return value > 0.0f ? value - deadband : value + deadband;
+}
+
+int moveTowardByStep(int current, int target, int maxStep) {
+  if (target > current) {
+    return min(current + maxStep, target);
+  }
+  if (target < current) {
+    return max(current - maxStep, target);
+  }
+  return current;
+}
+
 TtsEngineType ttsEngineTypeFromString(const String& value) {
   return value == "simple_wav" ? TtsEngineType::SimpleWav
                                : TtsEngineType::VoiceVoxCompatible;
@@ -95,13 +112,23 @@ M5Canvas& startupCanvas() {
 }
 
 constexpr uint32_t LEVEL_HOLD_UPDATE_INTERVAL_MS = 80;
-constexpr int LEVEL_HOLD_SERVO_SPEED = 260;
+constexpr int LEVEL_HOLD_SERVO_SPEED = 160;
+constexpr float LEVEL_HOLD_FILTER_ALPHA = 0.35f;
+constexpr float LEVEL_HOLD_DEADBAND_DEG = 0.6f;
+constexpr float LEVEL_HOLD_MAX_OUTPUT_DEG = 35.0f;
+constexpr int LEVEL_HOLD_MAX_STEP_DEG = 5;
+constexpr float LEVEL_HOLD_ACCEL_MIN_NORM = 0.05f;
 
 AppMode currentMode = AppMode::LocalLlm;
 bool levelHoldActive = false;
 uint32_t levelHoldLastUpdateAt = 0;
-PidController levelHoldRollPid{8.0f, 0.25f, 1.4f};
-PidController levelHoldPitchPid{10.0f, 0.3f, 1.8f};
+PidController levelHoldRollPid{1.15f, 0.0f, 0.12f};
+PidController levelHoldPitchPid{1.35f, 0.0f, 0.14f};
+bool levelHoldFilterReady = false;
+float levelHoldFilteredRollDeg = 0.0f;
+float levelHoldFilteredPitchDeg = 0.0f;
+int levelHoldYawTarget = 0;
+int levelHoldPitchTarget = 0;
 
 bool modeMenuOpen = false;
 bool displayWasTouching = false;
@@ -119,6 +146,11 @@ const char* appModeName(AppMode mode) {
 void resetLevelHoldPid() {
   levelHoldRollPid.reset();
   levelHoldPitchPid.reset();
+  levelHoldFilterReady = false;
+  levelHoldFilteredRollDeg = 0.0f;
+  levelHoldFilteredPitchDeg = 0.0f;
+  levelHoldYawTarget = 0;
+  levelHoldPitchTarget = 0;
   levelHoldLastUpdateAt = millis();
 }
 
@@ -202,6 +234,11 @@ void updateLevelHoldMode() {
   float az = 0.0f;
   M5.Imu.getAccel(&ax, &ay, &az);
 
+  const float accelNorm = sqrtf(ax * ax + ay * ay + az * az);
+  if (accelNorm < LEVEL_HOLD_ACCEL_MIN_NORM) {
+    return;
+  }
+
   const auto& calibration = calibrationController.data();
   const float rollDeg =
       atan2f(ay, az) * 180.0f / PI - calibration.levelRollDeg;
@@ -209,18 +246,43 @@ void updateLevelHoldMode() {
       atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / PI -
       calibration.levelPitchDeg;
 
-  const int yawCorrection =
-      static_cast<int>(roundf(levelHoldRollPid.update(rollDeg, dt)));
-  const int pitchCorrection =
-      static_cast<int>(roundf(-levelHoldPitchPid.update(pitchDeg, dt)));
+  if (!levelHoldFilterReady) {
+    levelHoldFilteredRollDeg = rollDeg;
+    levelHoldFilteredPitchDeg = pitchDeg;
+    levelHoldFilterReady = true;
+  } else {
+    levelHoldFilteredRollDeg +=
+        (rollDeg - levelHoldFilteredRollDeg) * LEVEL_HOLD_FILTER_ALPHA;
+    levelHoldFilteredPitchDeg +=
+        (pitchDeg - levelHoldFilteredPitchDeg) * LEVEL_HOLD_FILTER_ALPHA;
+  }
+
+  const float rollError =
+      applyDeadband(levelHoldFilteredRollDeg, LEVEL_HOLD_DEADBAND_DEG);
+  const float pitchError =
+      applyDeadband(levelHoldFilteredPitchDeg, LEVEL_HOLD_DEADBAND_DEG);
+
+  const int yawCorrection = static_cast<int>(roundf(constrain(
+      levelHoldRollPid.update(rollError, dt),
+      -LEVEL_HOLD_MAX_OUTPUT_DEG,
+      LEVEL_HOLD_MAX_OUTPUT_DEG)));
+  const int pitchCorrection = static_cast<int>(roundf(constrain(
+      -levelHoldPitchPid.update(pitchError, dt),
+      -LEVEL_HOLD_MAX_OUTPUT_DEG,
+      LEVEL_HOLD_MAX_OUTPUT_DEG)));
 
   const int yawTarget = constrain(
       yawCorrection, calibration.yawMin, calibration.yawMax);
   const int pitchTarget = constrain(
       pitchCorrection, calibration.pitchMin, calibration.pitchMax);
 
+  levelHoldYawTarget = moveTowardByStep(
+      levelHoldYawTarget, yawTarget, LEVEL_HOLD_MAX_STEP_DEG);
+  levelHoldPitchTarget = moveTowardByStep(
+      levelHoldPitchTarget, pitchTarget, LEVEL_HOLD_MAX_STEP_DEG);
+
   M5StackChan.Motion.move(
-      yawTarget, pitchTarget, LEVEL_HOLD_SERVO_SPEED);
+      levelHoldYawTarget, levelHoldPitchTarget, LEVEL_HOLD_SERVO_SPEED);
 }
 
 void updateActiveMode() {
