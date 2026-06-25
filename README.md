@@ -126,8 +126,9 @@ Windows Defender Firewallが確認を表示した場合は、信頼できる
 プライベートネットワークからのアクセスのみ許可してください。
 
 Windows / macOSではVOICEVOXまたはAivisSpeechを推奨します。Androidでは
-Android TextToSpeechを使うHTTP Gateway方式を推奨します。Androidアプリ本体や
-Gatewayの実装はこのリポジトリには含まれません。
+Android TextToSpeechなどをHTTPで呼び出すGateway方式を推奨します。
+Android向け専用Gatewayアプリはこのリポジトリには含まれませんが、
+スマートフォンだけで動作確認するためのTermux手順を後述します。
 
 ### 2. PCのIPアドレスを確認
 
@@ -159,6 +160,201 @@ TTS Engine Typeは次の2種類です。
 |---|---|
 | `voicevox_compatible` | `POST /audio_query?text=...&speaker=...` のJSONを `POST /synthesis?speaker=...` へ渡す |
 | `simple_wav` | `POST /synthesis` へ本文テキストを送り、返ってきた `audio/wav` を再生する |
+
+## AndroidスマートフォンだけでローカルLLM + TTSへつなぐ
+
+Androidスマートフォンだけで完結させる場合は、スマートフォンを
+`simple_wav` 互換のTTS Gatewayとして動かします。
+
+```text
+StackChan
+  -> POST /synthesis
+Android Gateway
+  -> llama-serverで返答生成
+  -> espeak-ngでWAV生成
+  -> audio/wavをStackChanへ返す
+```
+
+### Google Playアプリだけでできる範囲
+
+Google Playの既存アプリだけでも、スマートフォン内でローカルLLMや
+読み上げを試すことはできます。
+
+- PocketPal AI: スマートフォン上でGGUFモデルを動かすローカルLLMアプリ
+- Maid: llama.cpp / GGUFモデルを扱えるローカルLLMアプリ
+- Maise: Android標準TextToSpeech APIで利用できるオンデバイス音声エンジン
+- Speech Recognition & Synthesis from Google: Android標準系の音声認識・読み上げエンジン
+
+ただし、これらは通常「スマートフォン画面上でチャットするアプリ」
+または「AndroidのTTSエンジン」です。StackChanが必要とする
+`POST /synthesis` へ `audio/wav` を返すLAN内HTTPサーバーではないため、
+StackChanの内蔵スピーカーから話させるにはGatewayが別途必要です。
+
+### Termuxで検証用Gatewayを作る
+
+次の手順はGoogle Playアプリだけではありませんが、PCを使わずスマートフォンだけで
+ローカルLLM、読み上げ、StackChan接続まで確認できます。
+TermuxはF-Droid版またはGitHub版を推奨します。
+
+1. Termuxをインストールし、必要なパッケージを入れます。
+
+```sh
+pkg update -y
+pkg upgrade -y
+pkg install -y git cmake clang make python curl jq espeak-ng
+python -m pip install fastapi uvicorn requests
+```
+
+2. llama.cppをスマートフォン内でビルドします。
+
+```sh
+cd ~
+git clone --depth 1 https://github.com/ggml-org/llama.cpp
+cd llama.cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF
+cmake --build build -j2
+./build/bin/llama-server --help
+```
+
+3. GGUFモデルを用意します。
+
+スマートフォンでは0.5B〜1.5B程度の小さなInstructモデルを推奨します。
+Hugging FaceなどからQ4系のGGUFファイルをダウンロードし、Termuxから参照できる
+場所へ置きます。Androidの共有ストレージを使う場合は、初回だけ次を実行します。
+
+```sh
+termux-setup-storage
+mkdir -p ~/models
+cp /sdcard/Download/ダウンロードしたモデル.gguf ~/models/model.gguf
+```
+
+4. llama-serverを起動します。
+
+```sh
+cd ~/llama.cpp
+./build/bin/llama-server \
+  -m ~/models/model.gguf \
+  --host 127.0.0.1 \
+  --port 8080 \
+  --alias local \
+  -c 1024 \
+  -n 80
+```
+
+このTermuxセッションは起動したままにします。
+
+5. Termuxの左端メニューから `NEW SESSION` を開き、Gatewayスクリプトを作ります。
+
+```sh
+cd ~
+nano gateway.py
+```
+
+`gateway.py` に次を保存します。
+
+```python
+from fastapi import FastAPI, Request, Response
+import os
+import requests
+import subprocess
+import tempfile
+
+app = FastAPI()
+
+LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
+
+SYSTEM_PROMPT = (
+    "あなたはStackChanです。"
+    "日本語で、短く、1文か2文で返事してください。"
+    "音声合成しやすいように、できるだけひらがなで返してください。"
+)
+
+
+@app.post("/synthesis")
+async def synthesis(request: Request):
+    user_text = (await request.body()).decode("utf-8", errors="ignore").strip()
+    if not user_text:
+        user_text = "こんにちは"
+
+    payload = {
+        "model": "local",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ],
+        "max_tokens": 80,
+        "temperature": 0.7,
+        "stream": False,
+    }
+
+    llm_response = requests.post(LLAMA_URL, json=payload, timeout=180)
+    llm_response.raise_for_status()
+    reply = llm_response.json()["choices"][0]["message"]["content"].strip()
+
+    wav_path = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+    try:
+        subprocess.run(
+            ["espeak-ng", "-v", "ja", "-s", "145", "-w", wav_path, reply],
+            check=True,
+            timeout=60,
+        )
+        with open(wav_path, "rb") as wav_file:
+            wav = wav_file.read()
+    finally:
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+
+    return Response(content=wav, media_type="audio/wav")
+```
+
+6. Gatewayを起動します。
+
+```sh
+uvicorn gateway:app --host 0.0.0.0 --port 50021
+```
+
+7. スマートフォンのIPアドレスを確認します。
+
+```sh
+ip addr show wlan0
+```
+
+`inet 192.168.x.x/24` の `192.168.x.x` がスマートフォンのIPアドレスです。
+
+8. Gatewayの動作を確認します。
+
+別のTermuxセッションで次を実行し、`test.wav` が作成されればGatewayは動いています。
+
+```sh
+curl -X POST http://127.0.0.1:50021/synthesis \
+  -H "Content-Type: text/plain; charset=utf-8" \
+  --data "こんにちは。じこしょうかいして" \
+  --output test.wav
+```
+
+9. StackChanの設定画面で次のように設定します。
+
+| 項目 | 設定例 |
+|---|---|
+| TTS Engine Type | `simple_wav` |
+| TTS Host | スマートフォンのIPアドレス。例: `192.168.1.34` |
+| TTS Port | `50021` |
+| Speaker / Style ID | `3` のままで可 |
+| Aボタンで話す文章 | `こんにちは。じこしょうかいして` |
+
+保存して再起動後、Aボタンまたは頭頂シングルタップで、設定した文章が
+スマートフォン内のGatewayへ送られます。GatewayがローカルLLMで返答を作り、
+WAVへ変換してStackChanへ返すと、StackChanのスピーカーから再生されます。
+
+### Android連携の注意点
+
+- スマートフォンとStackChanは同じ2.4 GHz LANに接続してください。
+- スマートフォンの画面消灯や省電力設定でTermuxが停止する場合があります。
+  動作確認中は充電し、Termuxをバッテリー最適化の対象外にしてください。
+- `espeak-ng` の日本語音声は接続確認向けです。自然な音声にしたい場合は、
+  Android TextToSpeech APIやMaiseなどを呼び出す専用Gatewayアプリが必要です。
+- Google PlayのローカルLLMアプリだけで、StackChan互換のHTTP WAV APIまで
+  公開できる既製構成は現時点では確認できていません。
 
 ## StackChanの初回設定
 
