@@ -44,6 +44,7 @@ enum class ModeMenuButton {
   None,
   LocalLlm,
   LevelHold,
+  Settings,
   Close,
 };
 
@@ -131,6 +132,7 @@ int levelHoldYawTarget = 0;
 int levelHoldPitchTarget = 0;
 
 bool modeMenuOpen = false;
+bool settingsInfoOpen = false;
 bool displayWasTouching = false;
 int16_t displayTouchStartX = 0;
 int16_t displayTouchStartY = 0;
@@ -418,13 +420,16 @@ ModeMenuButton modeMenuButtonAt(int16_t x, int16_t y) {
   if (x < rowX || x > rowX + rowW) {
     return ModeMenuButton::None;
   }
-  if (y >= 64 && y <= 110) {
+  if (y >= 48 && y <= 88) {
     return ModeMenuButton::LocalLlm;
   }
-  if (y >= 122 && y <= 168) {
+  if (y >= 96 && y <= 136) {
     return ModeMenuButton::LevelHold;
   }
-  if (y >= 188 && y <= 226) {
+  if (y >= 144 && y <= 184) {
+    return ModeMenuButton::Settings;
+  }
+  if (y >= 192 && y <= 232) {
     return ModeMenuButton::Close;
   }
   return ModeMenuButton::None;
@@ -435,17 +440,18 @@ void drawModeMenu(ModeMenuButton pressed) {
   const int16_t width = display.width();
   constexpr int16_t rowX = 18;
   const int16_t rowW = width - rowX * 2;
+  constexpr int16_t rowH = 40;
 
   display.fillScreen(TFT_BLACK);
   display.setFont(&fonts::Font2);
   display.setTextDatum(middle_center);
   display.setTextSize(2);
   display.setTextColor(TFT_WHITE, TFT_BLACK);
-  display.drawString("MODE", width / 2, 28);
+  display.drawString("MODE", width / 2, 18);
 
   display.setTextSize(1);
   display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  display.drawString(appModeName(currentMode), width / 2, 50);
+  display.drawString(appModeName(currentMode), width / 2, 36);
 
   auto drawRow = [&](ModeMenuButton button, const char* label,
                      int16_t y, uint16_t color) {
@@ -457,18 +463,65 @@ void drawModeMenu(ModeMenuButton pressed) {
     const bool isPressed = pressed == button;
     const uint16_t fill =
         isPressed ? color : (selected ? 0x2945 : 0x2104);
-    display.fillRoundRect(rowX, y, rowW, 46, 8, fill);
-    display.drawRoundRect(rowX, y, rowW, 46, 8,
+    display.fillRoundRect(rowX, y, rowW, rowH, 8, fill);
+    display.drawRoundRect(rowX, y, rowW, rowH, 8,
                           selected ? TFT_YELLOW : TFT_DARKGREY);
     display.setTextColor(TFT_WHITE, fill);
     display.setTextSize(2);
-    display.drawString(label, width / 2, y + 23);
+    display.drawString(label, width / 2, y + rowH / 2);
   };
 
-  drawRow(ModeMenuButton::LocalLlm, "LOCAL LLM", 64, 0x03E0);
-  drawRow(ModeMenuButton::LevelHold, "LEVEL HOLD", 122, 0x035F);
-  drawRow(ModeMenuButton::Close, "CLOSE", 188, 0x4208);
+  drawRow(ModeMenuButton::LocalLlm, "LOCAL LLM", 48, 0x03E0);
+  drawRow(ModeMenuButton::LevelHold, "LEVEL HOLD", 96, 0x035F);
+  drawRow(ModeMenuButton::Settings, "SETTINGS", 144, 0x8010);
+  drawRow(ModeMenuButton::Close, "CLOSE", 192, 0x4208);
   display.pushSprite(0, 0);
+}
+
+void drawSettingsInfo() {
+  auto& display = startupCanvas();
+  const int16_t width = display.width();
+  const int16_t height = display.height();
+
+  display.fillScreen(TFT_BLACK);
+  display.setFont(&fonts::Font2);
+  display.setTextDatum(middle_center);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextSize(2);
+  display.drawString("SETTINGS", width / 2, 28);
+
+  display.setTextSize(1);
+  if (configPortal.isConnected()) {
+    const String url = "http://" + configPortal.localIp().toString() + "/";
+    display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    display.drawString("ブラウザで開く:", width / 2, 82);
+    display.setTextColor(TFT_GREEN, TFT_BLACK);
+    display.drawString(url, width / 2, 110);
+    display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    display.drawString("スマホやPCから接続できます", width / 2, 148);
+  } else {
+    display.setTextColor(TFT_RED, TFT_BLACK);
+    display.drawString("Wi-Fi未接続", width / 2, 100);
+    display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    display.drawString("SSIDとパスワードを設定してください", width / 2, 132);
+  }
+
+  display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  display.drawString("タップして閉じる", width / 2, height - 14);
+  display.pushSprite(0, 0);
+}
+
+void openSettingsInfo() {
+  settingsInfoOpen = true;
+  avatarFace.pauseDrawing();
+  delay(20);
+  drawSettingsInfo();
+}
+
+void closeSettingsInfo() {
+  settingsInfoOpen = false;
+  avatarFace.resumeDrawing();
+  avatarFace.resetToDefault();
 }
 
 void openModeMenu() {
@@ -497,6 +550,14 @@ bool handleDisplayTouch() {
   int16_t y = 0;
   const bool touching = M5.Display.getTouch(&x, &y);
 
+  if (settingsInfoOpen) {
+    if (!touching && displayWasTouching) {
+      closeSettingsInfo();
+    }
+    displayWasTouching = touching;
+    return true;
+  }
+
   if (modeMenuOpen) {
     const ModeMenuButton current =
         touching ? modeMenuButtonAt(x, y) : ModeMenuButton::None;
@@ -511,6 +572,8 @@ bool handleDisplayTouch() {
         activateMode(AppMode::LocalLlm);
       } else if (selected == ModeMenuButton::LevelHold) {
         activateMode(AppMode::LevelHold);
+      } else if (selected == ModeMenuButton::Settings) {
+        openSettingsInfo();
       }
     }
     displayWasTouching = touching;
