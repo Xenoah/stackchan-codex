@@ -17,6 +17,11 @@ struct AppConfig {
   String ttsEngineType = "voicevox_compatible"; // TTSエンジン種別
   String speechText =
       "Hello! I am Zundamon. I can now talk using StackChan!"; // Aボタンで話すデフォルトテキスト
+
+  // カメラを使って明るい方向に目線を向ける機能。
+  // CoreS3 ではカメラと内部I2C（タッチ等）がバスを共有するため、
+  // タッチが効かなくなる/不安定な場合はこのスイッチをOFFにする。
+  bool cameraGaze = true;
 };
 
 // /statusページに表示するアプリ実行時の状態。
@@ -25,6 +30,14 @@ struct RuntimeStatus {
   String appMode = "---";       // 現在のアプリモード名（"LOCAL LLM" 等）
   bool servoCalibrated = false; // サーボキャリブレーション済みかどうか
   bool imuCalibrated = false;   // IMUキャリブレーション済みかどうか
+
+  // --- 診断情報（クラッシュ調査用）---
+  String resetReason = "";      // 直近の再起動理由（PANIC/BROWNOUT/WDT等）
+  uint32_t freeHeap = 0;        // 現在の空きヒープ（バイト）
+  uint32_t minFreeHeap = 0;     // 起動以降の最小空きヒープ（バイト）
+  uint32_t maxAllocHeap = 0;    // 確保可能な最大連続ブロック（フラグメント指標）
+  uint32_t freePsram = 0;       // 空きPSRAM（バイト）
+  bool cameraActive = false;    // カメラ目線が動作中かどうか
 };
 
 // WiFi接続・設定用Webサーバを管理するクラス。

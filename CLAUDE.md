@@ -114,8 +114,34 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 
 ---
 
+## Part C: 安定化・表現強化・カメラ目線（2026-06-28）
+
+| # | 項目 | 内容 | 状態 |
+|---|------|------|------|
+| C1 | クラッシュ原因修正 | アバター描画の `init(8)`→`init(1)`。m5avatar は毎フレーム 320x240 スプライトを createSprite/deleteSprite する。colorDepth=8 だと約77KB/フレームの連続確保が必要で、WiFi/TTS/HTML 確保とぶつかりヒープ断片化→確保失敗→クラッシュ（全状況・放置中も発生）。colorDepth=1 で約9.6KB/フレームに削減し断片化耐性を8倍に。見た目は StackChan 本来の2トーン（パレットの前景/背景色は反映） | ✅ |
+| C2 | クラッシュ診断 | 起動時の再起動理由（PANIC/BROWNOUT/TASK_WDT 等）と空きヒープ/最小ヒープ/最大連続ブロック/PSRAM を `/status` ページ・`/api/status`・シリアル(15秒毎)に表示。次回クラッシュ後に `/status` の **Last Reset** を見れば原因種別が分かる | ✅ |
+| C3 | 漢字読み上げ | Gateway で読み上げ前にマークダウン/装飾記号を除去（`sanitize_for_speech`）してから pykakasi で かな 変換。espeak が「アスタリスク」等と読むのを防止 | ✅ |
+| C4 | ピッチ上げ | Gateway デフォルト pitch 80→90（UIで 0–99 調整可、最大99） | ✅ |
+| C5 | 顔の動きを大げさに | 口パク開き具合を1.5倍に増幅 + Normal変形時に呼吸ズーム（±6%, 約2.4秒周期）で顔全体がゆっくり拡大縮小 | ✅ |
+| C6 | カメラ目線 | CoreS3 内蔵カメラ(GC0308)を QQVGA RGB565 で取得し、輝度重心の方向へ視線(`setGaze`)。4fps・発話中/メニュー中は休止・初期化失敗時は自動無効。設定ページの **Camera gaze** で ON/OFF（NVS保存） | ✅ |
+
+### カメラ目線の注意（重要）
+- CoreS3 ではカメラの SCCB が**内部I2C（タッチ/IMU/PMICと同じ 11/12 ピン）を共有**する。
+  `esp_camera_init` 前に `M5.In_I2C.release()` が必要なため、**カメラ有効時はタッチ操作が
+  効かなくなる可能性**がある。その場合はスマホの設定ページで **Camera gaze を OFF→保存**
+  すれば、再起動後カメラを初期化せずタッチが復帰する（起動時のサーボ選択ダイアログは
+  カメラ初期化より前なので影響しない）。
+- 左右が逆に見える場合は `main.cpp` の `kCamGazeHSign` を `-1` にする。
+- カメラは PSRAM を使用（QQVGA 2バッファ ≈ 76KB）。本体の動作はクラッシュ修正(C1)後に確認推奨。
+
+---
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。
 - 2026-06-27: Gateway 実装完了（app.py / ui.py / run.sh / stop.sh / requirements / README）。
   TestClient で 16/16 のスモークテスト合格（認証・設定・/ask・/synthesis・履歴・revoice・削除）。
+- 2026-06-28: ユーザ報告「全状況でしばらく動かすと落ちる」を調査→アバターの毎フレーム77KB
+  スプライト確保が断片化要因と特定し colorDepth=1 へ修正(C1)。診断表示(C2)、漢字読み整形(C3)、
+  ピッチ既定上げ(C4)、口/呼吸の誇張(C5)、カメラ目線(C6) を実装。ファーム build 成功
+  （RAM 19.5%, Flash 19.1%）。Gateway py_compile OK。

@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -60,7 +61,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "stackchan_port": 80,
     "voice_lang": "ja",
     "tts_voice": "default",
-    "pitch": 80,
+    "pitch": 90,
     "volume": 200,
     "speed": 150,
     "answer_mode": "short",
@@ -283,11 +284,34 @@ def call_llm(question: str, settings: Dict[str, Any], lang: str, mode: str) -> s
 # ----------------------------------------------------------------------------
 
 
+# マークダウン/装飾記号を除去する正規表現（espeak がそのまま読み上げるのを防ぐ）
+_MD_SYMBOLS = re.compile(r"[*#`_~>|]")
+_MD_LINK = re.compile(r"\[(.*?)\]\((?:.*?)\)")
+_MULTISPACE = re.compile(r"[ \t]+")
+_NEWLINES = re.compile(r"\s*\n+\s*")
+
+
+def sanitize_for_speech(text: str) -> str:
+    """読み上げ用にテキストを整形する。
+    - マークダウン記号（*, #, `, [..](..) 等）を除去
+    - 箇条書きの「・」を読点に、改行を句点に変換
+    - 連続空白を 1 つに
+    espeak はこれらの記号を「アスタリスク」等と読んでしまうため事前に除去する。
+    """
+    text = _MD_LINK.sub(r"\1", text)
+    text = _MD_SYMBOLS.sub("", text)
+    text = text.replace("・", "、")
+    text = _NEWLINES.sub("。", text)
+    text = _MULTISPACE.sub(" ", text)
+    return text.strip()
+
+
 def make_speech_text(answer: str, lang: str, kanji_to_kana: bool) -> str:
-    """発話用テキストを作る。ja かつ漢字読み変換ONなら かな に変換する。"""
+    """発話用テキストを作る。記号除去 → ja かつ漢字読み変換ONなら かな に変換する。"""
+    cleaned = sanitize_for_speech(answer)
     if lang == "ja" and kanji_to_kana:
-        return to_hiragana(answer)
-    return answer
+        return to_hiragana(cleaned)
+    return cleaned
 
 
 def synth_wav(

@@ -2,6 +2,7 @@
 
 #include <M5Unified.h>
 #include <esp_system.h>
+#include <math.h>
 
 namespace {
 
@@ -76,7 +77,14 @@ void AvatarFaceController::begin() {
   randomSeed(esp_random()); // ハードウェア乱数でまばたきタイミングをランダム化
 
   avatar_.setPosition(0, 0); // ディスプレイ左上を原点に配置
-  avatar_.init(8);            // 描画タスクを優先度8で起動
+  // init() の引数は描画スプライトの colorDepth（優先度ではない点に注意）。
+  // 重要: m5avatar の Face::draw() は毎フレーム 320x240 のスプライトを
+  // createSprite/deleteSprite する。colorDepth=8 だと 1フレームあたり約77KBの
+  // 連続メモリ確保が必要になり、WiFi/TTS/HTML 等の確保とぶつかってヒープが
+  // 断片化すると確保に失敗し、しばらく動かすとクラッシュする原因になる。
+  // colorDepth=1 にすると約9.6KB/フレームに減り、断片化に強くなる
+  // （見た目は StackChan 本来の2トーン表示。パレットの前景/背景色は反映される）。
+  avatar_.init(1);            // 描画タスク起動（1bit スプライトで省メモリ・安定）
   started_ = true;
 
   // 初期状態を全パラメータに適用する
@@ -114,6 +122,15 @@ void AvatarFaceController::update() {
   if (!showcaseEnabled_ && defaultReturnAt_ != 0 &&
       static_cast<int32_t>(now - defaultReturnAt_) >= 0) {
     resetToDefault();
+  }
+
+  // 呼吸に合わせた軽いズーム（Normal変形時のみ）。
+  // 顔全体がゆっくり拡大縮小して、より生き生きと大げさに見せる。
+  if (!showcaseEnabled_ &&
+      transformPatternIndex_ ==
+          static_cast<size_t>(TransformPattern::Normal)) {
+    const float pulse = 1.0f + 0.06f * sinf(now * 0.0026f); // ~2.4秒周期で±6%
+    avatar_.setScale(pulse);
   }
 
   updateBlink(now);

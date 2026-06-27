@@ -197,6 +197,7 @@ void ConfigPortal::load() {
       preferences_.getString("tts_engine", config_.ttsEngineType));
   config_.speechText =
       preferences_.getString("speech", config_.speechText);
+  config_.cameraGaze = preferences_.getBool("cam_gaze", config_.cameraGaze);
   preferences_.end();
 }
 
@@ -210,6 +211,7 @@ void ConfigPortal::save() {
   preferences_.putString("tts_speaker", config_.ttsSpeaker);
   preferences_.putString("tts_engine", config_.ttsEngineType);
   preferences_.putString("speech", config_.speechText);
+  preferences_.putBool("cam_gaze", config_.cameraGaze);
   preferences_.end();
 }
 
@@ -276,6 +278,8 @@ void ConfigPortal::registerRoutes() {
     config_.ttsEngineType =
         sanitizedTtsEngineType(server_.arg("tts_engine"));
     config_.speechText = server_.arg("speech");
+    // チェックボックスは未チェック時にPOSTされないため、存在で判定する
+    config_.cameraGaze = server_.hasArg("camera_gaze");
     save();
 
     server_.send(200, "text/html; charset=utf-8",
@@ -381,6 +385,18 @@ String ConfigPortal::pageHtml(const String& message) {
           htmlEscape(config_.speechText) + "</textarea>";
   html += F("</label>");
 
+  // --- カメラ目線（明るい方向へ目を向ける）---
+  html += F("<label style='margin-top:16px'>"
+            "<input type='checkbox' name='camera_gaze' value='1' "
+            "style='width:auto;margin-right:8px'");
+  if (config_.cameraGaze) {
+    html += F(" checked");
+  }
+  html += F(">Camera gaze (look toward bright light)</label>"
+           "<p class='hint'>Uses the front camera. On CoreS3 the camera shares "
+           "the internal I2C bus with the touch screen; if touch becomes "
+           "unresponsive, turn this OFF and save.</p>");
+
   html += F("<button type='submit'>Save &amp; Restart</button></form>"
             "<p style='color:#555;font-size:0.85em;margin-top:20px'>"
             "Configure your TTS server to accept HTTP connections "
@@ -485,6 +501,36 @@ String ConfigPortal::statusHtml() {
   html += String("<tr><td>IMU Cal</td><td class='") +
           (runtimeStatus_.imuCalibrated ? "ok'>OK" : "warn'>Not calibrated") +
           "</td></tr>";
+  html += String("<tr><td>Camera Gaze</td><td class='") +
+          (runtimeStatus_.cameraActive ? "ok'>Active" : "warn'>Off") +
+          "</td></tr>";
+  html += F("</table></div>");
+
+  // --- 診断（クラッシュ調査用）---
+  // Last Reset が PANIC=コードのクラッシュ、BROWNOUT=電源不足、
+  // TASK/INT WDT=ハング、POWERON=正常な電源投入。
+  // Max Alloc が Free に比べて極端に小さい場合はヒープ断片化のサイン。
+  html += F("<div class='card'><h3>Diagnostics</h3><table>");
+  {
+    const char* rrClass = "ok";
+    if (runtimeStatus_.resetReason == "PANIC" ||
+        runtimeStatus_.resetReason == "BROWNOUT" ||
+        runtimeStatus_.resetReason.indexOf("WDT") >= 0) {
+      rrClass = "err";
+    }
+    html += String("<tr><td>Last Reset</td><td class='") + rrClass + "'>" +
+            htmlEscape(runtimeStatus_.resetReason) + "</td></tr>";
+  }
+  html += "<tr><td>Free Heap</td><td>" +
+          String(runtimeStatus_.freeHeap / 1024) + " KB</td></tr>";
+  html += String("<tr><td>Min Free Heap</td><td class='") +
+          (runtimeStatus_.minFreeHeap < 20000 ? "err" : "ok") + "'>" +
+          String(runtimeStatus_.minFreeHeap / 1024) + " KB</td></tr>";
+  html += String("<tr><td>Max Alloc Block</td><td class='") +
+          (runtimeStatus_.maxAllocHeap < 12000 ? "err" : "ok") + "'>" +
+          String(runtimeStatus_.maxAllocHeap / 1024) + " KB</td></tr>";
+  html += "<tr><td>Free PSRAM</td><td>" +
+          String(runtimeStatus_.freePsram / 1024) + " KB</td></tr>";
   html += F("</table></div>");
 
   // --- システム情報 ---
@@ -580,7 +626,7 @@ String ConfigPortal::apiStatusJson() {
   }
 
   String j;
-  j.reserve(220);
+  j.reserve(360);
   j += F("{\"ok\":true,\"connected\":");
   j += isConnected() ? F("true") : F("false");
   j += F(",\"speaking\":");
@@ -593,6 +639,16 @@ String ConfigPortal::apiStatusJson() {
   j += String(config_.ttsPort);
   j += F(",\"tts_engine\":\"");
   j += jsonEscape(config_.ttsEngineType);
-  j += F("\"}");
+  j += F("\",\"reset_reason\":\"");
+  j += jsonEscape(runtimeStatus_.resetReason);
+  j += F("\",\"free_heap\":");
+  j += String(runtimeStatus_.freeHeap);
+  j += F(",\"min_free_heap\":");
+  j += String(runtimeStatus_.minFreeHeap);
+  j += F(",\"max_alloc_heap\":");
+  j += String(runtimeStatus_.maxAllocHeap);
+  j += F(",\"free_psram\":");
+  j += String(runtimeStatus_.freePsram);
+  j += F("}");
   return j;
 }
