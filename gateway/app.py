@@ -61,7 +61,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "stackchan_port": 80,
     "voice_lang": "ja",
     "tts_voice": "default",
-    "pitch": 90,
+    "pitch": 99,
     "volume": 200,
     "speed": 150,
     "answer_mode": "short",
