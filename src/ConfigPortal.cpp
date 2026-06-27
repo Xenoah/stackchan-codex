@@ -77,6 +77,29 @@ String ConfigPortal::accessPointName() const {
   return accessPointName_;
 }
 
+void ConfigPortal::startSettingsAp() {
+  if (settingsApActive_ || portalActive_) return;
+  ensureAccessPointName();
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(accessPointName_.c_str(), "stackchan");
+  settingsApActive_ = true;
+}
+
+void ConfigPortal::stopSettingsAp() {
+  if (!settingsApActive_) return;
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  settingsApActive_ = false;
+}
+
+bool ConfigPortal::isSettingsApActive() const {
+  return settingsApActive_;
+}
+
+IPAddress ConfigPortal::settingsApIp() const {
+  return WiFi.softAPIP();
+}
+
 void ConfigPortal::load() {
   preferences_.begin("stackchan", true);
   config_.wifiSsid = preferences_.getString("ssid", "");
@@ -119,17 +142,20 @@ bool ConfigPortal::connectWifi() {
   return WiFi.status() == WL_CONNECTED;
 }
 
-void ConfigPortal::startPortal() {
-  portalActive_ = true;
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_AP_STA);
-
+void ConfigPortal::ensureAccessPointName() {
+  if (!accessPointName_.isEmpty()) return;
   const uint64_t chipId = ESP.getEfuseMac();
   char suffix[7];
   snprintf(suffix, sizeof(suffix), "%06llX",
            static_cast<unsigned long long>(chipId & 0xFFFFFF));
   accessPointName_ = "StackChan-Setup-" + String(suffix);
+}
 
+void ConfigPortal::startPortal() {
+  portalActive_ = true;
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_AP_STA);
+  ensureAccessPointName();
   WiFi.softAP(accessPointName_.c_str(), "stackchan");
   server_.begin();
 }
@@ -162,7 +188,7 @@ void ConfigPortal::registerRoutes() {
 
     server_.send(
         200, "text/html; charset=utf-8",
-        pageHtml("保存しました。StackChanを再起動します。"));
+        pageHtml("Saved. Restarting StackChan..."));
     delay(800);
     ESP.restart();
   });
@@ -172,7 +198,7 @@ String ConfigPortal::pageHtml(const String& message) {
   String html;
   html.reserve(5000);
   html += F(
-      "<!doctype html><html lang='ja'><head>"
+      "<!doctype html><html lang='en'><head>"
       "<meta charset='utf-8'><meta name='viewport' "
       "content='width=device-width,initial-scale=1'>"
       "<title>StackChan Setup</title><style>"
@@ -196,13 +222,13 @@ String ConfigPortal::pageHtml(const String& message) {
   html += wifiOptionsHtml();
   html += F(
       "</select></label><p><a href='/' style='color:#8fd3ff'>"
-      "周辺Wi-Fiを再スキャン</a></p>"
-      "<label>SSIDを手入力（非公開SSIDなど）"
-      "<input name='manual_ssid' placeholder='入力時はこちらを優先'>");
-  html += F("</label><label>Wi-Fi password");
+      "Rescan nearby Wi-Fi</a></p>"
+      "<label>Enter SSID manually (for hidden networks)"
+      "<input name='manual_ssid' placeholder='Takes priority when filled'>");
+  html += F("</label><label>Wi-Fi Password");
   html += F(
       "<input type='password' name='password' "
-      "placeholder='変更しない場合は空欄'>");
+      "placeholder='Leave blank to keep current'>");
   html += F("</label><label>TTS Engine Type");
   html += F(
       "<select name='tts_engine' style='box-sizing:border-box;width:100%;"
@@ -222,15 +248,15 @@ String ConfigPortal::pageHtml(const String& message) {
   html += F("</label><label>TTS Port");
   html += "<input type='number' name='tts_port' value='" +
           String(config_.ttsPort) + "'>";
-  html += F("</label><label>Speaker / Style ID（ずんだもん ノーマル: 3）");
+  html += F("</label><label>Speaker / Style ID (Zundamon Normal: 3)");
   html += "<input name='speaker' value='" +
           htmlEscape(config_.ttsSpeaker) + "'>";
-  html += F("</label><label>Aボタンで話す文章");
+  html += F("</label><label>Text to speak (A button)");
   html += "<textarea name='speech' rows='4'>" +
           htmlEscape(config_.speechText) + "</textarea>";
-  html += F("</label><button type='submit'>保存して再起動</button></form>"
-            "<p>TTSサーバーは同じLANからHTTP接続できるように"
-            "待ち受ける設定にしてください。</p></body></html>");
+  html += F("</label><button type='submit'>Save &amp; Restart</button></form>"
+            "<p>Configure your TTS server to accept HTTP connections "
+            "from the same LAN.</p></body></html>");
   return html;
 }
 
@@ -240,7 +266,7 @@ String ConfigPortal::wifiOptionsHtml() {
 
   const int count = WiFi.scanNetworks(false, true);
   if (count <= 0) {
-    options += F("<option value=''>Wi-Fiが見つかりません</option>");
+    options += F("<option value=''>No Wi-Fi networks found</option>");
     WiFi.scanDelete();
     return options;
   }
@@ -265,7 +291,7 @@ String ConfigPortal::wifiOptionsHtml() {
 
     const int32_t rssi = WiFi.RSSI(i);
     const char* strength =
-        rssi >= -55 ? "強" : (rssi >= -70 ? "中" : "弱");
+        rssi >= -55 ? "strong" : (rssi >= -70 ? "medium" : "weak");
     const bool secured = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
     const bool selected = ssid == config_.wifiSsid;
     currentSsidFound |= selected;
@@ -277,7 +303,7 @@ String ConfigPortal::wifiOptionsHtml() {
     options += ">" + htmlEscape(ssid) + " (" + strength + ", " +
                String(rssi) + " dBm";
     if (secured) {
-      options += F(", 鍵あり");
+      options += F(", secured");
     }
     options += F(")</option>");
   }
@@ -285,7 +311,7 @@ String ConfigPortal::wifiOptionsHtml() {
   if (!config_.wifiSsid.isEmpty() && !currentSsidFound) {
     options += "<option value='" + htmlEscape(config_.wifiSsid) +
                "' selected>" + htmlEscape(config_.wifiSsid) +
-               " (保存済み)</option>";
+               " (saved)</option>";
   }
 
   WiFi.scanDelete();

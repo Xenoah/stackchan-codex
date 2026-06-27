@@ -488,37 +488,47 @@ void drawSettingsInfo() {
   display.setTextDatum(middle_center);
   display.setTextColor(TFT_WHITE, TFT_BLACK);
   display.setTextSize(2);
-  display.drawString("SETTINGS", width / 2, 28);
+  display.drawString("SETTINGS", width / 2, 20);
 
   display.setTextSize(1);
+  int16_t y = 50;
+
   if (configPortal.isConnected()) {
     const String url = "http://" + configPortal.localIp().toString() + "/";
     display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    display.drawString("ブラウザで開く:", width / 2, 82);
+    display.drawString("Open in browser (Wi-Fi):", width / 2, y);
+    y += 18;
     display.setTextColor(TFT_GREEN, TFT_BLACK);
-    display.drawString(url, width / 2, 110);
+    display.drawString(url, width / 2, y);
+    y += 26;
+  }
+
+  if (configPortal.isSettingsApActive()) {
     display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    display.drawString("スマホやPCから接続できます", width / 2, 148);
-  } else {
-    display.setTextColor(TFT_RED, TFT_BLACK);
-    display.drawString("Wi-Fi未接続", width / 2, 100);
-    display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    display.drawString("SSIDとパスワードを設定してください", width / 2, 132);
+    display.drawString("Hotspot: " + configPortal.accessPointName(), width / 2, y);
+    y += 16;
+    display.drawString("Password: stackchan", width / 2, y);
+    y += 18;
+    const String apUrl = "http://" + configPortal.settingsApIp().toString() + "/";
+    display.setTextColor(TFT_CYAN, TFT_BLACK);
+    display.drawString(apUrl, width / 2, y);
   }
 
   display.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  display.drawString("タップして閉じる", width / 2, height - 14);
+  display.drawString("Tap to close", width / 2, height - 14);
   display.pushSprite(0, 0);
 }
 
 void openSettingsInfo() {
   settingsInfoOpen = true;
+  configPortal.startSettingsAp();
   avatarFace.pauseDrawing();
   delay(20);
   drawSettingsInfo();
 }
 
 void closeSettingsInfo() {
+  configPortal.stopSettingsAp();
   settingsInfoOpen = false;
   avatarFace.resumeDrawing();
   avatarFace.resetToDefault();
