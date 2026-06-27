@@ -59,6 +59,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "stackchan_host": "",
     "stackchan_port": 80,
     "voice_lang": "ja",
+    "tts_voice": "default",
     "pitch": 80,
     "volume": 200,
     "speed": 150,
@@ -79,6 +80,16 @@ ANSWER_MODES = {
     "hitokoto": ("一言で、できるだけ短く答えてください。", "Answer in just a few words.", 64),
     "short": ("短く簡潔に答えてください。", "Answer briefly.", 160),
     "normal": ("普通の長さで自然に答えてください。", "Answer naturally.", 384),
+}
+
+# espeak-ng の声色バリアント。言語は voice_lang で決め、ここでは音色だけ変える。
+TTS_VOICE_VARIANTS = {
+    "default": "",
+    "f1": "+f1",
+    "f2": "+f2",
+    "m1": "+m1",
+    "m2": "+m2",
+    "m3": "+m3",
 }
 
 # ----------------------------------------------------------------------------
@@ -189,6 +200,42 @@ def norm_mode(value: Any) -> str:
     return value if value in ANSWER_MODES else "short"
 
 
+def norm_tts_voice(value: Any) -> str:
+    voice = str(value or "").strip().lower()
+    return voice if voice in TTS_VOICE_VARIANTS else "default"
+
+
+def japanese_char_count(text: str) -> int:
+    count = 0
+    for ch in text:
+        code = ord(ch)
+        if (
+            0x3040 <= code <= 0x30FF  # Hiragana / Katakana
+            or 0x3400 <= code <= 0x9FFF  # CJK ideographs
+            or 0xF900 <= code <= 0xFAFF
+        ):
+            count += 1
+    return count
+
+
+def latin_char_count(text: str) -> int:
+    return sum(1 for ch in text if ("a" <= ch.lower() <= "z"))
+
+
+def speech_lang_for(text: str, requested_lang: Any) -> str:
+    lang = norm_lang(requested_lang)
+    if lang == "en":
+        ja_chars = japanese_char_count(text)
+        if ja_chars >= 3 and ja_chars >= latin_char_count(text):
+            return "ja"
+    return lang
+
+
+def espeak_voice(lang: str, tts_voice: Any) -> str:
+    base = "ja" if norm_lang(lang) == "ja" else "en-us"
+    return base + TTS_VOICE_VARIANTS[norm_tts_voice(tts_voice)]
+
+
 # ----------------------------------------------------------------------------
 # LLM 呼び出し
 # ----------------------------------------------------------------------------
@@ -243,9 +290,17 @@ def make_speech_text(answer: str, lang: str, kanji_to_kana: bool) -> str:
     return answer
 
 
-def synth_wav(text: str, lang: str, pitch: int, volume: int, speed: int, out_path: Path) -> None:
+def synth_wav(
+    text: str,
+    lang: str,
+    pitch: int,
+    volume: int,
+    speed: int,
+    out_path: Path,
+    tts_voice: Any = "default",
+) -> None:
     """espeak-ng で WAV を生成する。"""
-    voice = "ja" if lang == "ja" else "en-us"
+    voice = espeak_voice(lang, tts_voice)
     if not text.strip():
         text = "..."
     cmd = [
@@ -295,6 +350,8 @@ def build_item(
     volume: int,
     speed: int,
     mode: str,
+    tts_voice: str = "default",
+    speech_lang: Optional[str] = None,
     item_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     item_id = item_id or new_history_id()
@@ -305,6 +362,8 @@ def build_item(
         "answer": answer,
         "speech_text": speech_text,
         "voice_lang": lang,
+        "speech_lang": speech_lang or lang,
+        "tts_voice": norm_tts_voice(tts_voice),
         "pitch": pitch,
         "volume": volume,
         "speed": speed,
@@ -441,14 +500,27 @@ def process_question(question: str, settings: Dict[str, Any], lang: str, mode: s
     例外（LLM失敗・TTS失敗）は呼び出し側で処理する。
     """
     answer = call_llm(question, settings, lang, mode)
-    speech_text = make_speech_text(answer, lang, bool(settings.get("kanji_to_kana", True)))
+    speech_lang = speech_lang_for(answer, lang)
+    speech_text = make_speech_text(answer, speech_lang, bool(settings.get("kanji_to_kana", True)))
 
     pitch = clamp(settings.get("pitch"), 0, 99, 80)
     volume = clamp(settings.get("volume"), 0, 200, 200)
     speed = clamp(settings.get("speed"), 80, 260, 150)
+    tts_voice = norm_tts_voice(settings.get("tts_voice", "default"))
 
-    item = build_item(question, answer, speech_text, lang, pitch, volume, speed, mode)
-    synth_wav(speech_text, lang, pitch, volume, speed, history_wav_path(item["id"]))
+    item = build_item(
+        question,
+        answer,
+        speech_text,
+        lang,
+        pitch,
+        volume,
+        speed,
+        mode,
+        tts_voice=tts_voice,
+        speech_lang=speech_lang,
+    )
+    synth_wav(speech_text, speech_lang, pitch, volume, speed, history_wav_path(item["id"]), tts_voice)
     save_history_item(item)
     set_current(item)
     prune_history(clamp(settings.get("max_history"), 1, 100000, 50))
@@ -458,24 +530,30 @@ def process_question(question: str, settings: Dict[str, Any], lang: str, mode: s
 def revoice_item(item: Dict[str, Any], settings: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
     """既存 item の回答テキストから音声だけ再生成する（LLM は呼ばない）。"""
     lang = norm_lang(overrides.get("voice_lang", item.get("voice_lang", "ja")))
+    speech_lang = speech_lang_for(item.get("answer", ""), lang)
     pitch = clamp(overrides.get("pitch", item.get("pitch")), 0, 99, 80)
     volume = clamp(overrides.get("volume", item.get("volume")), 0, 200, 200)
     speed = clamp(overrides.get("speed", item.get("speed")), 80, 260, 150)
+    tts_voice = norm_tts_voice(
+        overrides.get("tts_voice", item.get("tts_voice", settings.get("tts_voice", "default")))
+    )
     kanji_to_kana = overrides.get("kanji_to_kana")
     if kanji_to_kana is None:
         kanji_to_kana = bool(settings.get("kanji_to_kana", True))
 
-    speech_text = make_speech_text(item["answer"], lang, bool(kanji_to_kana))
+    speech_text = make_speech_text(item["answer"], speech_lang, bool(kanji_to_kana))
     item.update(
         {
             "speech_text": speech_text,
             "voice_lang": lang,
+            "speech_lang": speech_lang,
+            "tts_voice": tts_voice,
             "pitch": pitch,
             "volume": volume,
             "speed": speed,
         }
     )
-    synth_wav(speech_text, lang, pitch, volume, speed, history_wav_path(item["id"]))
+    synth_wav(speech_text, speech_lang, pitch, volume, speed, history_wav_path(item["id"]), tts_voice)
     save_history_item(item)
     return item
 
@@ -557,7 +635,7 @@ def status(request: Request) -> JSONResponse:
 def public_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     """パスワード等の秘匿項目を除いた設定を返す。"""
     keys = [
-        "stackchan_host", "stackchan_port", "voice_lang", "pitch", "volume",
+        "stackchan_host", "stackchan_port", "voice_lang", "tts_voice", "pitch", "volume",
         "speed", "answer_mode", "kanji_to_kana", "auto_speak", "max_history",
         "system_prompt",
     ]
@@ -580,6 +658,8 @@ async def update_settings(request: Request) -> JSONResponse:
         settings["stackchan_port"] = clamp(form.get("stackchan_port"), 1, 65535, 80)
     if form.get("voice_lang") is not None:
         settings["voice_lang"] = norm_lang(form.get("voice_lang"))
+    if form.get("tts_voice") is not None:
+        settings["tts_voice"] = norm_tts_voice(form.get("tts_voice"))
     if form.get("pitch") is not None:
         settings["pitch"] = clamp(form.get("pitch"), 0, 99, 80)
     if form.get("volume") is not None:
@@ -634,16 +714,35 @@ async def ask(request: Request) -> JSONResponse:
             {"ok": False, "error": f"LLM生成に失敗しました: {exc}"}, status_code=502
         )
 
-    speech_text = make_speech_text(answer, lang, bool(settings.get("kanji_to_kana", True)))
-    pitch = clamp(settings.get("pitch"), 0, 99, 80)
-    volume = clamp(settings.get("volume"), 0, 200, 200)
-    speed = clamp(settings.get("speed"), 80, 260, 150)
-    item = build_item(question, answer, speech_text, lang, pitch, volume, speed, mode)
+    kanji_to_kana = form.get("kanji_to_kana")
+    if kanji_to_kana is None:
+        kanji_to_kana = bool(settings.get("kanji_to_kana", True))
+    else:
+        kanji_to_kana = str(kanji_to_kana).lower() in ("1", "true", "on", "yes")
+
+    speech_lang = speech_lang_for(answer, lang)
+    speech_text = make_speech_text(answer, speech_lang, bool(kanji_to_kana))
+    pitch = clamp(form.get("pitch", settings.get("pitch")), 0, 99, 80)
+    volume = clamp(form.get("volume", settings.get("volume")), 0, 200, 200)
+    speed = clamp(form.get("speed", settings.get("speed")), 80, 260, 150)
+    tts_voice = norm_tts_voice(form.get("tts_voice", settings.get("tts_voice", "default")))
+    item = build_item(
+        question,
+        answer,
+        speech_text,
+        lang,
+        pitch,
+        volume,
+        speed,
+        mode,
+        tts_voice=tts_voice,
+        speech_lang=speech_lang,
+    )
 
     tts_ok = True
     tts_error = ""
     try:
-        synth_wav(speech_text, lang, pitch, volume, speed, history_wav_path(item["id"]))
+        synth_wav(speech_text, speech_lang, pitch, volume, speed, history_wav_path(item["id"]), tts_voice)
     except Exception as exc:
         tts_ok = False
         tts_error = str(exc)
@@ -688,6 +787,7 @@ async def voice_rebuild(request: Request) -> JSONResponse:
 
     overrides = {
         "voice_lang": form.get("voice_lang"),
+        "tts_voice": form.get("tts_voice"),
         "pitch": form.get("pitch"),
         "volume": form.get("volume"),
         "speed": form.get("speed"),
@@ -804,6 +904,7 @@ async def history_revoice(item_id: str, request: Request) -> JSONResponse:
     form = await request.form()
     overrides = {
         "voice_lang": form.get("voice_lang"),
+        "tts_voice": form.get("tts_voice"),
         "pitch": form.get("pitch"),
         "volume": form.get("volume"),
         "speed": form.get("speed"),

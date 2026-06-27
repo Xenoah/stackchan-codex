@@ -14,7 +14,7 @@ Android Termux 上の Gateway が LLM 推論・音声生成・履歴管理をす
 1. Android Termux で Gateway を起動（llama-server + FastAPI）
 2. スマホ/PC ブラウザから Gateway UI を開く
 3. パスワードでログイン
-4. 質問入力 + 回答言語/長さ/ピッチ/音量/速度 を設定
+4. 質問入力 + 回答言語/長さ/TTS音声/ピッチ/音量/速度 を設定
 5. 「送信して喋らせる」
 6. Gateway が LLM で回答生成 → 同じテキストから WAV 生成
 7. Gateway が StackChan の `POST /api/speak` を呼ぶ
@@ -72,10 +72,10 @@ Android Termux 上の Gateway が LLM 推論・音声生成・履歴管理をす
 
 ### settings.json 項目
 `password_hash, password_salt, session_secret, stackchan_host, stackchan_port,
-voice_lang, pitch, volume, speed, answer_mode, kanji_to_kana, auto_speak,
+voice_lang, tts_voice, pitch, volume, speed, answer_mode, kanji_to_kana, auto_speak,
 max_history, system_prompt`
 
-デフォルト: stackchan_port=80, voice_lang=ja, pitch=80, volume=200, speed=150,
+デフォルト: stackchan_port=80, voice_lang=ja, tts_voice=default, pitch=80, volume=200, speed=150,
 answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 初期パスワード `stackchan`（salt+sha256 で保存、平文不可）。
 
@@ -89,6 +89,7 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 ### 音声生成
 - ja: `espeak-ng -v ja`（必要に応じ pykakasi で読み変換、読み上げ用テキストを保存・表示）
 - en: `espeak-ng -v en-us`
+- tts_voice: `default`, `f1`, `f2`, `m1`, `m2`, `m3`（espeak-ng の `+f1` 等を付与）
 - pitch `-p` 0–99（既定80）, volume `-a` 0–200（既定200）, speed `-s` 80–260（既定150）
 
 ### 完了条件
@@ -97,7 +98,7 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 3. `/api/speak` 追加 ✅
 4. ブラウザ送信で A ボタン不要で発話 ✅（/ask → set_current → /api/speak → /synthesis）
 5. A ボタンで最後の質問を再 LLM 発話 ✅（`__REASK_LAST__` → process_question）
-6. ピッチ/音量/速度をブラウザ変更可 ✅（設定保存 + revoice）
+6. TTS音声/ピッチ/音量/速度をブラウザ変更可 ✅（設定保存 + revoice）
 7. 音声だけ再生成可 ✅（/voice/rebuild, /history/{id}/revoice）
 8. settings.json 永続保存 ✅（原子的書き込み）
 9. 履歴から再発話/声変更/削除 ✅

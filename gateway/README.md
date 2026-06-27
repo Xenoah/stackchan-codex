@@ -50,6 +50,7 @@ mkdir -p ~/models   # ~/models/model.gguf を配置
 3. 初期パスワード **`stackchan`** でログイン（設定画面で変更可）。
 4. 「接続先 / プロンプト」で StackChan の Host/Port を設定して保存。
 5. 質問を入力 →「送信して喋らせる」。`auto_speak` ON なら自動で StackChan が喋る。
+   声を変える場合は Gateway UI の「音声設定」→「TTS音声」を選ぶ。
 
 ### StackChan 側の設定（Web UI: `http://<StackChanのIP>/`）
 
@@ -63,6 +64,8 @@ mkdir -p ~/models   # ~/models/model.gguf を配置
 
 - A ボタン: 最後の質問を**再度 LLM 処理**して喋る（`__REASK_LAST__`）。
 - ブラウザ送信: A ボタン不要でそのまま喋る（Gateway が `/api/speak` を叩く）。
+- `simple_wav` では音声生成は Gateway 側で行うため、StackChan 側の `Speaker / Style ID`
+  を変えても声色は変わらない。声色は Gateway UI の「TTS音声」で変更する。
 
 ## 保存データ
 
@@ -97,5 +100,10 @@ mkdir -p ~/models   # ~/models/model.gguf を配置
 
 - **LLM: NG** … `tmux attach -t stackchan_llama` でログ確認。モデルパス/メモリ不足を疑う。
 - **StackChan: NG** … Host/Port、同一 LAN か、StackChan 側 TTS Host が本機 IP かを確認。
-- **音声が変** … 日本語は `kanji_to_kana` ON 推奨（espeak-ng はかな読みが安定）。
+- **「Japanese letter」「Chinese」のように読まれる** … Gateway UI の
+  「回答/読み上げ言語」を `日本語` にし、`kanji_to_kana` を ON にする。
+  それでも漢字読みが崩れる場合は `python -m pip install -r requirements.txt` で
+  `pykakasi` が入っているか確認する。
+- **声色を変えたい** … Gateway UI の「音声設定」→「TTS音声」を変更してから
+  「音声だけ再生成」または「送信して喋らせる」を実行する。
 - **busy** … StackChan が発話中。終わってから再送。

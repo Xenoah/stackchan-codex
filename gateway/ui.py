@@ -91,7 +91,7 @@ MAIN_HTML = (
   <h3>質問する</h3>
   <textarea id='question' rows='3' placeholder='StackChan に聞きたいことを入力…'></textarea>
   <div class='row'>
-    <div><label>回答言語
+    <div><label>回答/読み上げ言語
       <select id='voice_lang'>
         <option value='ja'>日本語</option>
         <option value='en'>英語</option>
@@ -110,6 +110,15 @@ MAIN_HTML = (
 <div class='card'>
   <h3>音声設定</h3>
   <div class='row'>
+    <div><label>TTS音声
+      <select id='tts_voice'>
+        <option value='default'>標準</option>
+        <option value='f1'>女性 1</option>
+        <option value='f2'>女性 2</option>
+        <option value='m1'>男性 1</option>
+        <option value='m2'>男性 2</option>
+        <option value='m3'>男性 3</option>
+      </select></label></div>
     <div><label>ピッチ (0-99) <input type='number' id='pitch' min='0' max='99'></label></div>
     <div><label>音量 (0-200) <input type='number' id='volume' min='0' max='200'></label></div>
     <div><label>速度 (80-260) <input type='number' id='speed' min='80' max='260'></label></div>
@@ -159,6 +168,9 @@ MAIN_HTML = (
 <script>
 let CURRENT_ID = null;
 let SETTINGS_APPLIED = false;
+const TTS_VOICE_LABELS = {
+  default:'標準', f1:'女性 1', f2:'女性 2', m1:'男性 1', m2:'男性 2', m3:'男性 3'
+};
 
 function toast(msg, isErr){
   const t=document.getElementById('toast');
@@ -203,6 +215,7 @@ function pill(name, ok){
 
 function applySettings(s){
   setVal('voice_lang', s.voice_lang); setVal('answer_mode', s.answer_mode);
+  setVal('tts_voice', s.tts_voice || 'default');
   setVal('pitch', s.pitch); setVal('volume', s.volume); setVal('speed', s.speed);
   setVal('stackchan_host', s.stackchan_host); setVal('stackchan_port', s.stackchan_port);
   setVal('system_prompt', s.system_prompt);
@@ -217,7 +230,7 @@ async function saveSettings(){
   const body=form({
     stackchan_host:gv('stackchan_host'), stackchan_port:gv('stackchan_port'),
     voice_lang:gv('voice_lang'), answer_mode:gv('answer_mode'),
-    pitch:gv('pitch'), volume:gv('volume'), speed:gv('speed'),
+    tts_voice:gv('tts_voice'), pitch:gv('pitch'), volume:gv('volume'), speed:gv('speed'),
     kanji_to_kana:document.getElementById('kanji_to_kana').checked,
     auto_speak:document.getElementById('auto_speak').checked,
     system_prompt:gv('system_prompt'),
@@ -237,6 +250,8 @@ async function ask(){
   try{
     const {data}=await api('/ask',{method:'POST',body:form({
       question:q, voice_lang:gv('voice_lang'), answer_mode:gv('answer_mode'),
+      tts_voice:gv('tts_voice'), pitch:gv('pitch'), volume:gv('volume'), speed:gv('speed'),
+      kanji_to_kana:document.getElementById('kanji_to_kana').checked,
     })});
     if(!data.ok){ toast(data.error||'失敗しました', true); return; }
     showAnswer(data.item);
@@ -266,7 +281,7 @@ async function speakCurrent(){
 async function rebuildVoice(){
   const body=form({
     id:CURRENT_ID||undefined, voice_lang:gv('voice_lang'),
-    pitch:gv('pitch'), volume:gv('volume'), speed:gv('speed'),
+    tts_voice:gv('tts_voice'), pitch:gv('pitch'), volume:gv('volume'), speed:gv('speed'),
     kanji_to_kana:document.getElementById('kanji_to_kana').checked,
   });
   const {data}=await api('/voice/rebuild',{method:'POST',body});
@@ -283,11 +298,13 @@ async function loadHistory(){
 }
 function renderHist(it){
   const when=(it.created_at||'').replace('T',' ').slice(0,19);
+  const ttsVoice=TTS_VOICE_LABELS[it.tts_voice||'default']||it.tts_voice||'標準';
+  const langInfo=(it.speech_lang&&it.speech_lang!==it.voice_lang)?`${it.voice_lang}/${it.speech_lang}`:it.voice_lang;
   return `<div class='hist'>
     <div class='histq'>${esc(it.question)}</div>
     <div class='muted'>${esc(it.answer)}</div>
     <div class='muted' style='font-size:.78rem'>読み: ${esc(it.speech_text)}</div>
-    <div class='muted' style='font-size:.74rem'>${when} · ${it.voice_lang} · p${it.pitch}/v${it.volume}/s${it.speed}</div>
+    <div class='muted' style='font-size:.74rem'>${when} · ${langInfo} · ${ttsVoice} · p${it.pitch}/v${it.volume}/s${it.speed}</div>
     <audio controls preload='none' src='/history/${it.id}.wav?t=${Date.now()}'></audio>
     <div class='btns'>
       <button class='mini' onclick="histSpeak('${it.id}')">もう一度喋る</button>
@@ -301,7 +318,7 @@ async function histSpeak(id){
   else toast('失敗: '+(data.error||''), true);
 }
 async function histRevoice(id){
-  const body=form({voice_lang:gv('voice_lang'),pitch:gv('pitch'),volume:gv('volume'),
+  const body=form({voice_lang:gv('voice_lang'),tts_voice:gv('tts_voice'),pitch:gv('pitch'),volume:gv('volume'),
     speed:gv('speed'),kanji_to_kana:document.getElementById('kanji_to_kana').checked});
   const {data}=await api('/history/'+id+'/revoice',{method:'POST',body});
   if(data.ok){ toast('声を変更しました'); loadHistory(); }
