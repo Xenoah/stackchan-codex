@@ -5,6 +5,7 @@
 
 namespace {
 
+// 6種類の表情（インデックス順）
 constexpr m5avatar::Expression kExpressions[] = {
     m5avatar::Expression::Happy,
     m5avatar::Expression::Angry,
@@ -14,33 +15,44 @@ constexpr m5avatar::Expression kExpressions[] = {
     m5avatar::Expression::Neutral,
 };
 
+// 表情の表示名
 constexpr const char* kExpressionNames[] = {
     "HAPPY", "ANGRY", "SAD", "DOUBT", "SLEEPY", "NEUTRAL",
 };
 
+// 顔型の表示名
 constexpr const char* kFaceNames[] = {
     "DEFAULT", "SIMPLE", "OMEGA", "GIRLY", "GIRLY 2", "PINK DEMON",
     "DOGGY",
 };
 
+// カラーパレットの表示名
 constexpr const char* kPaletteNames[] = {
     "DEFAULT", "SKIN", "CYBER", "MONO", "DEMON",
 };
 
+// 目パターンの表示名
 constexpr const char* kEyePatternNames[] = {
     "AUTO BLINK", "OPEN", "WINK LEFT", "WINK RIGHT", "CLOSED",
 };
 
+// 変形パターンの表示名
 constexpr const char* kTransformNames[] = {
     "NORMAL", "ZOOM IN", "ZOOM OUT", "TILT LEFT", "TILT RIGHT",
 };
 
+// 表情・顔型切り替え後にデフォルトへ自動復帰するまでの時間（5秒）
 constexpr uint32_t kDefaultReturnDelayMs = 5000;
+
+// AutoBlinkモードのまばたき間隔: 3〜10秒のランダム
 constexpr uint32_t kBlinkIntervalMinMs = 3000;
 constexpr uint32_t kBlinkIntervalMaxMs = 10000;
+
+// まばたき中に目を閉じている時間: 100〜180msのランダム
 constexpr uint32_t kBlinkClosedMinMs = 100;
 constexpr uint32_t kBlinkClosedMaxMs = 180;
 
+// インデックスを循環させるヘルパー（負の方向にも対応）
 size_t wrapIndex(size_t current, int direction, size_t count) {
   const int next = static_cast<int>(current) + direction;
   return static_cast<size_t>((next % static_cast<int>(count) +
@@ -50,22 +62,24 @@ size_t wrapIndex(size_t current, int direction, size_t count) {
 
 }  // namespace
 
+// アバターを初期化する。
+// 重要: avatar_.init()（描画タスク起動）はセッターより先に呼ぶ必要がある。
+// 先にセッターを呼ぶと描画タスクのハンドルがnullのまま内部でsuspend()が呼ばれ、
+// setupタスク自体がブロックされてしまう。
 void AvatarFaceController::begin() {
   if (started_) {
-    return;
+    return; // 二重初期化を防ぐ
   }
 
   initializeFaces();
   initializePalettes();
-  randomSeed(esp_random());
+  randomSeed(esp_random()); // ハードウェア乱数でまばたきタイミングをランダム化
 
-  // Avatar setters suspend the drawing task internally. Start that task
-  // before applying the initial face state; calling them first can suspend
-  // the setup task itself because the drawing task handle is still null.
-  avatar_.setPosition(0, 0);
-  avatar_.init(8);
+  avatar_.setPosition(0, 0); // ディスプレイ左上を原点に配置
+  avatar_.init(8);            // 描画タスクを優先度8で起動
   started_ = true;
 
+  // 初期状態を全パラメータに適用する
   applyFace();
   applyPalette();
   applyExpression();
@@ -74,24 +88,29 @@ void AvatarFaceController::begin() {
   scheduleNextBlink(millis());
 }
 
+// 毎フレームの更新処理。メインループから毎回呼ぶ。
 void AvatarFaceController::update() {
   if (!started_) {
     return;
   }
 
   const uint32_t now = millis();
+
+  // ステータスの自動消去（durationMs指定の場合）
   if (statusClearAt_ != 0 &&
       static_cast<int32_t>(now - statusClearAt_) >= 0) {
     avatar_.setSpeechText("");
     statusClearAt_ = 0;
   }
 
+  // ショーケースモードの自動進行（1.8秒ごと）
   if (showcaseEnabled_ &&
       static_cast<int32_t>(now - nextShowcaseAt_) >= 0) {
     advanceShowcase();
     nextShowcaseAt_ = now + 1800;
   }
 
+  // デフォルト復帰タイマー（ショーケース中は無効）
   if (!showcaseEnabled_ && defaultReturnAt_ != 0 &&
       static_cast<int32_t>(now - defaultReturnAt_) >= 0) {
     resetToDefault();
@@ -100,6 +119,7 @@ void AvatarFaceController::update() {
   updateBlink(now);
 }
 
+// 表情を指定した種類に直接設定する（インデックスを検索して適用）
 void AvatarFaceController::setExpression(
     m5avatar::Expression expression) {
   for (size_t i = 0; i < kExpressionCount; ++i) {
@@ -111,6 +131,7 @@ void AvatarFaceController::setExpression(
   }
 }
 
+// 次の表情に切り替え、5秒後にデフォルトに戻す
 void AvatarFaceController::nextExpression() {
   expressionIndex_ = (expressionIndex_ + 1) % kExpressionCount;
   applyExpression();
@@ -118,6 +139,7 @@ void AvatarFaceController::nextExpression() {
   returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
+// 次の顔型に切り替え、5秒後にデフォルトに戻す
 void AvatarFaceController::nextFace() {
   faceIndex_ = (faceIndex_ + 1) % kFaceCount;
   applyFace();
@@ -125,6 +147,7 @@ void AvatarFaceController::nextFace() {
   returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
+// カラーパレットを切り替える（direction=+1で次、-1で前）
 void AvatarFaceController::nextPalette(int direction) {
   paletteIndex_ = wrapIndex(paletteIndex_, direction, kPaletteCount);
   applyPalette();
@@ -132,6 +155,7 @@ void AvatarFaceController::nextPalette(int direction) {
   returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
+// 次の目パターンに切り替える
 void AvatarFaceController::nextEyePattern() {
   eyePatternIndex_ = (eyePatternIndex_ + 1) % kEyePatternCount;
   applyEyePattern();
@@ -139,6 +163,7 @@ void AvatarFaceController::nextEyePattern() {
   returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
+// 次の変形パターンに切り替える
 void AvatarFaceController::nextTransform() {
   transformPatternIndex_ =
       (transformPatternIndex_ + 1) % kTransformPatternCount;
@@ -147,10 +172,12 @@ void AvatarFaceController::nextTransform() {
   returnToDefaultAfter(kDefaultReturnDelayMs);
 }
 
+// 口の開き具合を設定する（0.0〜1.0、範囲外はクランプ）
 void AvatarFaceController::setMouthOpenRatio(float ratio) {
   avatar_.setMouthOpenRatio(constrain(ratio, 0.0f, 1.0f));
 }
 
+// 両目の視線方向を設定する（vertical: -1=上, +1=下 / horizontal: -1=左, +1=右）
 void AvatarFaceController::setGaze(float vertical, float horizontal) {
   vertical = constrain(vertical, -1.0f, 1.0f);
   horizontal = constrain(horizontal, -1.0f, 1.0f);
@@ -158,12 +185,16 @@ void AvatarFaceController::setGaze(float vertical, float horizontal) {
   avatar_.setLeftGaze(vertical, horizontal);
 }
 
+// ステータステキストを表示する。
+// durationMs=0 の場合は明示的に消去するまで表示し続ける。
 void AvatarFaceController::showStatus(const char* text,
                                       uint32_t durationMs) {
   avatar_.setSpeechText(text);
   statusClearAt_ = durationMs == 0 ? 0 : millis() + durationMs;
 }
 
+// アバターのFreeRTOS描画タスクを一時停止する。
+// 画面を直接描画する前（メニュー表示・キャリブレーション画面など）に呼ぶ。
 void AvatarFaceController::pauseDrawing() {
   if (!started_ || drawingPaused_) {
     return;
@@ -172,6 +203,7 @@ void AvatarFaceController::pauseDrawing() {
   drawingPaused_ = true;
 }
 
+// アバターの描画タスクを再開する
 void AvatarFaceController::resumeDrawing() {
   if (!started_ || !drawingPaused_) {
     return;
@@ -180,13 +212,15 @@ void AvatarFaceController::resumeDrawing() {
   drawingPaused_ = false;
 }
 
+// 全パラメータをデフォルト値にリセットする。
+// expressionIndex_=5(Neutral), faceIndex_=0(Default), paletteIndex_=0(Default)
 void AvatarFaceController::resetToDefault() {
   showcaseEnabled_ = false;
-  expressionIndex_ = 5;
-  faceIndex_ = 0;
-  paletteIndex_ = 0;
-  eyePatternIndex_ = 0;
-  transformPatternIndex_ = 0;
+  expressionIndex_ = 5;  // Neutral
+  faceIndex_ = 0;        // Default
+  paletteIndex_ = 0;     // Default
+  eyePatternIndex_ = 0;  // AutoBlink
+  transformPatternIndex_ = 0; // Normal
 
   avatar_.setSpeechText("");
   avatar_.setMouthOpenRatio(0.0f);
@@ -200,16 +234,19 @@ void AvatarFaceController::resetToDefault() {
   defaultReturnAt_ = 0;
 }
 
+// delayMsミリ秒後にresetToDefault()を呼ぶタイマーをセットする
 void AvatarFaceController::returnToDefaultAfter(uint32_t delayMs) {
   defaultReturnAt_ = millis() + delayMs;
 }
 
+// ショーケースモードのON/OFFを切り替える。
+// ONにすると1.8秒ごとに自動で表情・目・変形が変わる。
 void AvatarFaceController::toggleShowcase() {
   showcaseEnabled_ = !showcaseEnabled_;
-  defaultReturnAt_ = 0;
+  defaultReturnAt_ = 0; // 自動復帰タイマーをキャンセル
 
   if (showcaseEnabled_) {
-    nextShowcaseAt_ = millis();
+    nextShowcaseAt_ = millis(); // 即座に最初のサイクルを実行
     showStatus("SHOWCASE ON");
   } else {
     resetToDefault();
@@ -241,29 +278,37 @@ const char* AvatarFaceController::transformName() const {
   return kTransformNames[transformPatternIndex_];
 }
 
+// 7種類の顔型オブジェクトを生成する。
+// faces_[0]はAvatarのデフォルト顔（ライブラリ管理）、それ以外はnewで確保。
 void AvatarFaceController::initializeFaces() {
-  faces_[0] = avatar_.getFace();
-  faces_[1] = new m5avatar::SimpleFace();
-  faces_[2] = new m5avatar::OmegaFace();
-  faces_[3] = new m5avatar::GirlyFace();
-  faces_[4] = new m5avatar::GirlyFace2();
-  faces_[5] = new m5avatar::PinkDemonFace();
-  faces_[6] = new m5avatar::DoggyFace();
+  faces_[0] = avatar_.getFace();            // Default（ライブラリ所有）
+  faces_[1] = new m5avatar::SimpleFace();   // シンプルな円形の目
+  faces_[2] = new m5avatar::OmegaFace();    // 大きな目のΩ型
+  faces_[3] = new m5avatar::GirlyFace();    // 女の子風
+  faces_[4] = new m5avatar::GirlyFace2();   // 女の子風2（まつ毛付き）
+  faces_[5] = new m5avatar::PinkDemonFace(); // ピンクの悪魔風
+  faces_[6] = new m5avatar::DoggyFace();    // 犬風
 }
 
+// 5種類のカラーパレットを設定する。
+// palettes_[0]はデフォルト（ライブラリのデフォルト色をそのまま使用）。
 void AvatarFaceController::initializePalettes() {
+  // Skin: 肌色背景、暗いグレーの顔パーツ、ピンクのアクセント
   palettes_[1].set(COLOR_PRIMARY, M5.Display.color24to16(0x383838));
   palettes_[1].set(COLOR_BACKGROUND, M5.Display.color24to16(0xFAC2A8));
   palettes_[1].set(COLOR_SECONDARY, TFT_PINK);
 
+  // Cyber: シアン・黄色のサイバーパンク風
   palettes_[2].set(COLOR_PRIMARY, TFT_YELLOW);
   palettes_[2].set(COLOR_BACKGROUND, TFT_DARKCYAN);
   palettes_[2].set(COLOR_SECONDARY, TFT_CYAN);
 
+  // Mono: モノクロ（白背景・グレーパーツ）
   palettes_[3].set(COLOR_PRIMARY, TFT_DARKGREY);
   palettes_[3].set(COLOR_BACKGROUND, TFT_WHITE);
   palettes_[3].set(COLOR_SECONDARY, TFT_LIGHTGREY);
 
+  // Demon: 赤・ピンク・マゼンタの悪魔風
   palettes_[4].set(COLOR_PRIMARY, TFT_RED);
   palettes_[4].set(COLOR_BACKGROUND, TFT_PINK);
   palettes_[4].set(COLOR_SECONDARY, TFT_MAGENTA);
@@ -281,13 +326,16 @@ void AvatarFaceController::applyPalette() {
   avatar_.setColorPalette(palettes_[paletteIndex_]);
 }
 
+// 目パターンを適用する。
+// AutoBlinkモードはライブラリ内蔵の自動まばたきを使わず、
+// このクラスが独自にタイマー管理する（3〜10秒ランダム間隔）。
 void AvatarFaceController::applyEyePattern() {
   const EyePattern pattern =
       static_cast<EyePattern>(eyePatternIndex_);
 
   switch (pattern) {
     case EyePattern::AutoBlink:
-      // Replace the library interval with a 3-10 second random scheduler.
+      // ライブラリのオートブリンクを無効にして、独自タイマーに切り替える
       avatar_.setIsAutoBlink(false);
       avatar_.setEyeOpenRatio(1.0f);
       blinkClosed_ = false;
@@ -300,59 +348,66 @@ void AvatarFaceController::applyEyePattern() {
       break;
     case EyePattern::WinkLeft:
       avatar_.setIsAutoBlink(false);
-      avatar_.setLeftEyeOpenRatio(0.0f);
-      avatar_.setRightEyeOpenRatio(1.0f);
+      avatar_.setLeftEyeOpenRatio(0.0f);   // 左目を閉じる
+      avatar_.setRightEyeOpenRatio(1.0f);  // 右目は開けたまま
       blinkClosed_ = false;
       break;
     case EyePattern::WinkRight:
       avatar_.setIsAutoBlink(false);
-      avatar_.setLeftEyeOpenRatio(1.0f);
-      avatar_.setRightEyeOpenRatio(0.0f);
+      avatar_.setLeftEyeOpenRatio(1.0f);   // 左目は開けたまま
+      avatar_.setRightEyeOpenRatio(0.0f);  // 右目を閉じる
       blinkClosed_ = false;
       break;
     case EyePattern::Closed:
       avatar_.setIsAutoBlink(false);
-      avatar_.setEyeOpenRatio(0.0f);
+      avatar_.setEyeOpenRatio(0.0f);       // 両目を閉じる
       blinkClosed_ = true;
       break;
   }
 }
 
+// 変形パターンをアバターに適用する（スケール・回転を組み合わせる）
 void AvatarFaceController::applyTransform() {
   const TransformPattern pattern =
       static_cast<TransformPattern>(transformPatternIndex_);
 
+  // まずデフォルト値にリセット
   avatar_.setScale(1.0f);
   avatar_.setRotation(0.0f);
 
   switch (pattern) {
     case TransformPattern::Normal:
-      break;
+      break; // リセット済みのまま
     case TransformPattern::ZoomIn:
-      avatar_.setScale(1.15f);
+      avatar_.setScale(1.15f);  // 15%拡大
       break;
     case TransformPattern::ZoomOut:
-      avatar_.setScale(0.85f);
+      avatar_.setScale(0.85f);  // 15%縮小
       break;
     case TransformPattern::TiltLeft:
-      avatar_.setRotation(-0.12f);
+      avatar_.setRotation(-0.12f); // 左傾き（約7度）
       break;
     case TransformPattern::TiltRight:
-      avatar_.setRotation(0.12f);
+      avatar_.setRotation(0.12f);  // 右傾き（約7度）
       break;
   }
 }
 
+// ショーケースモードで次のパターンに進める。
+// 表情→目→変形の順にサイクルし、表情が一周したら顔型を変え、
+// 顔型が一周したらパレットを変える。
 void AvatarFaceController::advanceShowcase() {
   expressionIndex_ = (expressionIndex_ + 1) % kExpressionCount;
   eyePatternIndex_ = (eyePatternIndex_ + 1) % kEyePatternCount;
   transformPatternIndex_ =
       (transformPatternIndex_ + 1) % kTransformPatternCount;
 
+  // 表情が一周したら次の顔型へ
   if (expressionIndex_ == 0) {
     faceIndex_ = (faceIndex_ + 1) % kFaceCount;
     applyFace();
 
+    // 顔型も一周したら次のパレットへ
     if (faceIndex_ == 0) {
       paletteIndex_ = (paletteIndex_ + 1) % kPaletteCount;
       applyPalette();
@@ -362,24 +417,31 @@ void AvatarFaceController::advanceShowcase() {
   applyExpression();
   applyEyePattern();
   applyTransform();
-  showStatus(expressionName(), 900);
+  showStatus(expressionName(), 900); // 表情名を0.9秒間表示
 }
 
+// AutoBlinkモードの自動まばたきを更新する。
+// タイムアウトの判定はuint32_tのラップアラウンドに対応するため
+// int32_tにキャストしてから比較する。
 void AvatarFaceController::updateBlink(uint32_t now) {
+  // AutoBlinkモード以外では何もしない
   if (eyePatternIndex_ !=
       static_cast<size_t>(EyePattern::AutoBlink)) {
     return;
   }
 
+  // 次のまばたき時刻になったら目を閉じる
   if (!blinkClosed_ &&
       static_cast<int32_t>(now - nextBlinkAt_) >= 0) {
     avatar_.setEyeOpenRatio(0.0f);
     blinkClosed_ = true;
+    // 100〜180msのランダムな時間後に目を開ける
     blinkOpenAt_ =
         now + random(kBlinkClosedMinMs, kBlinkClosedMaxMs + 1);
     return;
   }
 
+  // 目を閉じている時間が経過したら目を開けて次のまばたきをスケジュール
   if (blinkClosed_ &&
       static_cast<int32_t>(now - blinkOpenAt_) >= 0) {
     avatar_.setEyeOpenRatio(1.0f);
@@ -388,6 +450,7 @@ void AvatarFaceController::updateBlink(uint32_t now) {
   }
 }
 
+// 次のまばたき開始時刻をランダムにスケジュールする（3〜10秒後）
 void AvatarFaceController::scheduleNextBlink(uint32_t now) {
   nextBlinkAt_ =
       now + random(kBlinkIntervalMinMs, kBlinkIntervalMaxMs + 1);
