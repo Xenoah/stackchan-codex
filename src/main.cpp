@@ -414,6 +414,18 @@ void serviceApp() {
   avatarFace.update();     // アバターのステータス・まばたき・ショーケース更新
   updateLipSync();         // 口パクアニメーション更新
   updateActiveMode();      // LEVEL HOLDなどのモード固有処理
+
+  // /statusページ用のランタイム状態を2秒ごとに更新する
+  static uint32_t lastStatusUpdateAt = 0;
+  const uint32_t now = millis();
+  if (now - lastStatusUpdateAt >= 2000) {
+    RuntimeStatus status;
+    status.appMode = appModeName(currentMode);
+    status.servoCalibrated = calibrationController.data().servoValid;
+    status.imuCalibrated = calibrationController.data().imuLevelValid;
+    configPortal.setRuntimeStatus(status);
+    lastStatusUpdateAt = now;
+  }
 }
 
 // 設定されたテキストをTTSで読み上げる。

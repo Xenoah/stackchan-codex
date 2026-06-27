@@ -43,10 +43,47 @@ String selectedAttribute(const String& value, const char* option) {
   return "";
 }
 
+// 共通のHTMLヘッダ（スタイル・ナビゲーション付き）を生成する
+String commonHead(const char* title) {
+  String h;
+  h += F("<!doctype html><html lang='en'><head>"
+         "<meta charset='utf-8'><meta name='viewport' "
+         "content='width=device-width,initial-scale=1'>"
+         "<title>");
+  h += title;
+  h += F("</title><style>"
+         "body{font-family:sans-serif;max-width:640px;margin:24px auto;"
+         "padding:0 16px;background:#111;color:#eee}"
+         "h1{margin-bottom:4px}nav{margin-bottom:20px}"
+         "nav a{color:#8fd3ff;margin-right:16px;text-decoration:none}"
+         "nav a:hover{text-decoration:underline}"
+         "label{display:block;margin-top:14px}"
+         "input,select,textarea{box-sizing:border-box;width:100%;padding:10px;"
+         "margin-top:5px;border-radius:8px;border:1px solid #555;"
+         "background:#222;color:#fff}"
+         ".card{background:#1a1a1a;border-radius:12px;padding:16px;margin:14px 0}"
+         ".card h3{margin:0 0 10px}"
+         "table{width:100%;border-collapse:collapse}"
+         "td{padding:6px 2px;vertical-align:top}"
+         "td:first-child{color:#888;width:42%;white-space:nowrap}"
+         ".ok{color:#76d275}.warn{color:#ffd27f}.err{color:#ff6b6b}"
+         ".hint{font-size:0.85em;color:#888;margin-top:3px}"
+         "button{margin-top:20px;padding:12px 20px;border:0;border-radius:9px;"
+         "background:#76d275;color:#111;font-weight:bold;cursor:pointer}"
+         "</style></head><body>");
+  return h;
+}
+
+// 共通ナビゲーションバーを生成する
+String commonNav() {
+  return F("<nav><a href='/'>&#9881; Settings</a>"
+           "<a href='/status'>&#10003; Status</a></nav>");
+}
+
 }  // namespace
 
 bool ConfigPortal::begin() {
-  load();          // NVSから設定を読み込む
+  load();           // NVSから設定を読み込む
   registerRoutes(); // Webサーバのルートを登録する
 
   // 保存済みSSIDがあればWiFi接続を試みる
@@ -86,24 +123,25 @@ String ConfigPortal::accessPointName() const {
   return accessPointName_;
 }
 
+void ConfigPortal::setRuntimeStatus(const RuntimeStatus& status) {
+  runtimeStatus_ = status;
+}
+
 // SETTINGSメニューを開いたときに呼ぶ。
 // 既存のWiFi接続（STA）を切断せず、AP_STAモードで追加APを起動する。
-// これにより、同一WiFiのデバイスからも、APに直接接続したデバイスからも
-// 設定画面にアクセスできるようになる。
 void ConfigPortal::startSettingsAp() {
-  // セットアップAPが起動中の場合はそちらを優先（重複起動しない）
   if (settingsApActive_ || portalActive_) return;
   ensureAccessPointName();
-  WiFi.mode(WIFI_AP_STA);              // STA+APの同時動作モード
-  WiFi.softAP(accessPointName_.c_str(), "stackchan"); // パスワード: stackchan
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(accessPointName_.c_str(), "stackchan");
   settingsApActive_ = true;
 }
 
 // SETTINGSメニューを閉じたときに呼ぶ。APを停止してSTAモードに戻す。
 void ConfigPortal::stopSettingsAp() {
   if (!settingsApActive_) return;
-  WiFi.softAPdisconnect(true); // APを停止し、接続中の端末を切断
-  WiFi.mode(WIFI_STA);         // STAモードに戻す
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
   settingsApActive_ = false;
 }
 
@@ -112,16 +150,15 @@ bool ConfigPortal::isSettingsApActive() const {
 }
 
 IPAddress ConfigPortal::settingsApIp() const {
-  return WiFi.softAPIP(); // 通常 192.168.4.1
+  return WiFi.softAPIP();
 }
 
 // NVSのnamespace "stackchan" から設定を読み込む。
 // 古いキー名（vv_host, vv_port 等）との後方互換性も維持する。
 void ConfigPortal::load() {
-  preferences_.begin("stackchan", true); // 読み取り専用で開く
+  preferences_.begin("stackchan", true);
   config_.wifiSsid = preferences_.getString("ssid", "");
   config_.wifiPassword = preferences_.getString("password", "");
-  // 古いキー名 "vv_host" からのマイグレーションに対応
   config_.ttsHost = preferences_.getString(
       "tts_host", preferences_.getString("vv_host", config_.ttsHost));
   config_.ttsPort = preferences_.getUShort(
@@ -138,7 +175,7 @@ void ConfigPortal::load() {
 
 // 現在の設定をNVSに保存する（保存後は再起動が必要）
 void ConfigPortal::save() {
-  preferences_.begin("stackchan", false); // 書き込みモードで開く
+  preferences_.begin("stackchan", false);
   preferences_.putString("ssid", config_.wifiSsid);
   preferences_.putString("password", config_.wifiPassword);
   preferences_.putString("tts_host", config_.ttsHost);
@@ -149,11 +186,10 @@ void ConfigPortal::save() {
   preferences_.end();
 }
 
-// 保存済みSSID/パスワードでWiFiに接続する。
-// 最大15秒間接続を待ち、タイムアウトした場合はfalseを返す。
+// 保存済みSSID/パスワードでWiFiに接続する（最大15秒待機）
 bool ConfigPortal::connectWifi() {
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false); // 省電力モード無効（レイテンシ改善）
+  WiFi.setSleep(false);
   WiFi.begin(config_.wifiSsid.c_str(), config_.wifiPassword.c_str());
 
   const uint32_t startedAt = millis();
@@ -163,8 +199,7 @@ bool ConfigPortal::connectWifi() {
   return WiFi.status() == WL_CONNECTED;
 }
 
-// APのSSID名を生成・保存する。MACアドレスの末尾3バイトを16進数で使用し、
-// デバイスごとにユニークなSSID（例: "StackChan-Setup-A1B2C3"）を作る。
+// APのSSID名をMACアドレス末尾3バイトで生成する（未設定の場合のみ）
 void ConfigPortal::ensureAccessPointName() {
   if (!accessPointName_.isEmpty()) return;
   const uint64_t chipId = ESP.getEfuseMac();
@@ -174,32 +209,30 @@ void ConfigPortal::ensureAccessPointName() {
   accessPointName_ = "StackChan-Setup-" + String(suffix);
 }
 
-// WiFi接続失敗時のセットアップ用APを起動する。
-// 既存WiFiを切断してAP_STAモードに切り替え、Webサーバを起動する。
+// WiFi接続失敗時のセットアップ用APを起動する
 void ConfigPortal::startPortal() {
   portalActive_ = true;
-  WiFi.disconnect(true);   // 既存WiFi接続を切断
-  WiFi.mode(WIFI_AP_STA);  // AP+STAモード（後でSTA接続できるよう）
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_AP_STA);
   ensureAccessPointName();
   WiFi.softAP(accessPointName_.c_str(), "stackchan");
   server_.begin();
 }
 
-// WebサーバのURLルートを登録する。
-// GET /  → 設定ページを返す
-// POST /save → 設定を保存して再起動する
+// WebサーバのURLルートを登録する
 void ConfigPortal::registerRoutes() {
+  // GET / → 設定ページ（現在値を事前入力済み）
   server_.on("/", HTTP_GET, [this]() {
     server_.send(200, "text/html; charset=utf-8", pageHtml());
   });
 
+  // POST /save → 設定を保存して再起動
   server_.on("/save", HTTP_POST, [this]() {
-    // 手入力SSIDが空でなければ、ドロップダウンより優先する（非公開SSID対応）
     const String manualSsid = server_.arg("manual_ssid");
     config_.wifiSsid =
         manualSsid.isEmpty() ? server_.arg("ssid") : manualSsid;
 
-    // パスワードは空の場合は既存値を維持する（セキュリティ上、フォームに表示しないため）
+    // パスワードは送信された場合のみ更新（空欄なら既存値を維持）
     const String submittedPassword = server_.arg("password");
     if (!submittedPassword.isEmpty()) {
       config_.wifiPassword = submittedPassword;
@@ -207,102 +240,233 @@ void ConfigPortal::registerRoutes() {
 
     config_.ttsHost = server_.arg("tts_host");
     config_.ttsPort =
-        constrain(server_.arg("tts_port").toInt(), 1, 65535); // 有効ポート範囲に制限
+        constrain(server_.arg("tts_port").toInt(), 1, 65535);
     config_.ttsSpeaker = server_.arg("speaker");
-    config_.ttsSpeaker.trim(); // 前後の空白を除去
+    config_.ttsSpeaker.trim();
     if (config_.ttsSpeaker.isEmpty()) {
-      config_.ttsSpeaker = "3"; // 空の場合はデフォルト話者IDに戻す
+      config_.ttsSpeaker = "3";
     }
     config_.ttsEngineType =
         sanitizedTtsEngineType(server_.arg("tts_engine"));
     config_.speechText = server_.arg("speech");
     save();
 
-    // 保存完了メッセージを表示してから800ms後に再起動
-    server_.send(
-        200, "text/html; charset=utf-8",
-        pageHtml("Saved. Restarting StackChan..."));
+    server_.send(200, "text/html; charset=utf-8",
+                 pageHtml("Saved. Restarting StackChan..."));
     delay(800);
     ESP.restart();
   });
+
+  // GET /status → システム状態ページ（5秒自動更新）
+  server_.on("/status", HTTP_GET, [this]() {
+    server_.send(200, "text/html; charset=utf-8", statusHtml());
+  });
 }
 
-// 設定WebページのHTML文字列を生成する。
-// モバイル対応のダークテーマUIで、WiFiスキャン結果をドロップダウンに表示する。
+// 設定WebページのHTMLを生成する。
+// 現在保存されている値をフォームに事前入力する。
+// パスワードは値を表示せず、設定済みかどうかのみを示す。
 String ConfigPortal::pageHtml(const String& message) {
   String html;
-  html.reserve(5000); // 余裕を持ったバッファ確保でメモリ断片化を防ぐ
-  html += F(
-      "<!doctype html><html lang='en'><head>"
-      "<meta charset='utf-8'><meta name='viewport' "
-      "content='width=device-width,initial-scale=1'>"
-      "<title>StackChan Setup</title><style>"
-      "body{font-family:sans-serif;max-width:640px;margin:24px auto;"
-      "padding:0 16px;background:#111;color:#eee}"
-      "label{display:block;margin-top:14px}input,textarea{box-sizing:border-box;"
-      "width:100%;padding:10px;margin-top:5px;border-radius:8px;border:1px "
-      "solid #555;background:#222;color:#fff}button{margin-top:20px;padding:"
-      "12px 20px;border:0;border-radius:9px;background:#76d275;color:#111;"
-      "font-weight:bold}</style></head><body><h1>StackChan Setup</h1>");
+  html.reserve(5500);
+  html += commonHead("StackChan Setup");
+  html += F("<h1>StackChan Setup</h1>");
+  html += commonNav();
 
-  // 保存成功などのメッセージがあれば表示する
   if (!message.isEmpty()) {
-    html += "<p>" + htmlEscape(message) + "</p>";
+    html += "<p><strong>" + htmlEscape(message) + "</strong></p>";
   }
 
-  html += F(
-      "<form method='post' action='/save'><label>Wi-Fi SSID"
-      "<select name='ssid' style='box-sizing:border-box;width:100%;"
-      "padding:10px;margin-top:5px;border-radius:8px;border:1px solid #555;"
-      "background:#222;color:#fff'>");
-  html += wifiOptionsHtml(); // WiFiスキャン結果を埋め込む
-  html += F(
-      "</select></label><p><a href='/' style='color:#8fd3ff'>"
-      "Rescan nearby Wi-Fi</a></p>"
-      "<label>Enter SSID manually (for hidden networks)"
-      "<input name='manual_ssid' placeholder='Takes priority when filled'>");
-  html += F("</label><label>Wi-Fi Password");
-  html += F(
-      "<input type='password' name='password' "
-      "placeholder='Leave blank to keep current'>");
-  html += F("</label><label>TTS Engine Type");
-  html += F(
-      "<select name='tts_engine' style='box-sizing:border-box;width:100%;"
-      "padding:10px;margin-top:5px;border-radius:8px;border:1px solid #555;"
-      "background:#222;color:#fff'>");
+  html += F("<form method='post' action='/save'>");
+
+  // --- Wi-Fi SSID ---
+  html += F("<label>Wi-Fi SSID"
+            "<select name='ssid' style='box-sizing:border-box;width:100%;"
+            "padding:10px;margin-top:5px;border-radius:8px;border:1px solid #555;"
+            "background:#222;color:#fff'>");
+  html += wifiOptionsHtml();
+  html += F("</select></label>"
+            "<p><a href='/' style='color:#8fd3ff'>Rescan nearby Wi-Fi</a></p>"
+            "<label>Enter SSID manually (for hidden networks)"
+            "<input name='manual_ssid' placeholder='Takes priority when filled'>"
+            "</label>");
+
+  // --- Wi-Fi パスワード（値は表示しない、設定済み状態のみ示す）---
+  html += F("<label>Wi-Fi Password");
+  if (!config_.wifiPassword.isEmpty()) {
+    html += F("<span class='hint'> &mdash; currently set, leave blank to keep</span>");
+  } else {
+    html += F("<span class='hint'> &mdash; not set</span>");
+  }
+  html += F("<input type='password' name='password' "
+            "placeholder='Enter to change'></label>");
+
+  // --- TTS エンジン種別 ---
+  html += F("<label>TTS Engine Type"
+            "<select name='tts_engine' style='box-sizing:border-box;width:100%;"
+            "padding:10px;margin-top:5px;border-radius:8px;border:1px solid #555;"
+            "background:#222;color:#fff'>");
   html += "<option value='voicevox_compatible'" +
-          selectedAttribute(config_.ttsEngineType,
-                            "voicevox_compatible") +
+          selectedAttribute(config_.ttsEngineType, "voicevox_compatible") +
           ">voicevox_compatible</option>";
   html += "<option value='simple_wav'" +
           selectedAttribute(config_.ttsEngineType, "simple_wav") +
           ">simple_wav</option>";
-  html += F("</select>");
-  html += F("</label><label>TTS Host");
-  html += "<input name='tts_host' value='" +
-          htmlEscape(config_.ttsHost) + "'>";
+  html += F("</select></label>");
+
+  // --- TTS ホスト・ポート・話者（すべて現在値を事前入力）---
+  html += F("<label>TTS Host");
+  html += "<input name='tts_host' value='" + htmlEscape(config_.ttsHost) + "'>";
   html += F("</label><label>TTS Port");
-  html += "<input type='number' name='tts_port' value='" +
+  html += "<input type='number' name='tts_port' min='1' max='65535' value='" +
           String(config_.ttsPort) + "'>";
   html += F("</label><label>Speaker / Style ID (Zundamon Normal: 3)");
-  html += "<input name='speaker' value='" +
-          htmlEscape(config_.ttsSpeaker) + "'>";
-  html += F("</label><label>Text to speak (A button)");
+  html += "<input name='speaker' value='" + htmlEscape(config_.ttsSpeaker) + "'>";
+  html += F("</label>");
+
+  // --- Aボタンで話すテキスト（現在値を事前入力）---
+  html += F("<label>Text to speak (A button)");
   html += "<textarea name='speech' rows='4'>" +
           htmlEscape(config_.speechText) + "</textarea>";
-  html += F("</label><button type='submit'>Save &amp; Restart</button></form>"
-            "<p>Configure your TTS server to accept HTTP connections "
-            "from the same LAN.</p></body></html>");
+  html += F("</label>");
+
+  html += F("<button type='submit'>Save &amp; Restart</button></form>"
+            "<p style='color:#555;font-size:0.85em;margin-top:20px'>"
+            "Configure your TTS server to accept HTTP connections "
+            "from the same LAN.</p>"
+            "</body></html>");
+  return html;
+}
+
+// システム状態ページのHTMLを生成する。
+// WiFi状態・TTS設定・システム情報・キャリブレーション状態を表示する。
+// 5秒ごとに自動更新する。
+String ConfigPortal::statusHtml() {
+  String html;
+  html.reserve(4000);
+
+  // 5秒ごとに自動更新（<meta refresh>）
+  html += F("<!doctype html><html lang='en'><head>"
+            "<meta charset='utf-8'><meta name='viewport' "
+            "content='width=device-width,initial-scale=1'>"
+            "<meta http-equiv='refresh' content='5'>"
+            "<title>StackChan Status</title>");
+
+  // commonHead のスタイルを直接埋め込む（<meta refresh>と競合しないよう分離）
+  html += F("<style>"
+            "body{font-family:sans-serif;max-width:640px;margin:24px auto;"
+            "padding:0 16px;background:#111;color:#eee}"
+            "h1{margin-bottom:4px}nav{margin-bottom:20px}"
+            "nav a{color:#8fd3ff;margin-right:16px;text-decoration:none}"
+            "nav a:hover{text-decoration:underline}"
+            ".card{background:#1a1a1a;border-radius:12px;padding:16px;margin:14px 0}"
+            ".card h3{margin:0 0 10px}"
+            "table{width:100%;border-collapse:collapse}"
+            "td{padding:6px 2px;vertical-align:top}"
+            "td:first-child{color:#888;width:42%;white-space:nowrap}"
+            ".ok{color:#76d275}.warn{color:#ffd27f}.err{color:#ff6b6b}"
+            ".sub{color:#555;font-size:0.85em}"
+            "</style></head><body>");
+
+  html += F("<h1>StackChan Status</h1>");
+  html += commonNav();
+
+  // --- Wi-Fi 状態 ---
+  html += F("<div class='card'><h3>Wi-Fi</h3><table>");
+  if (isConnected()) {
+    const int32_t rssi = WiFi.RSSI();
+    const char* strength =
+        rssi >= -55 ? "strong" : (rssi >= -70 ? "medium" : "weak");
+    html += F("<tr><td>Status</td><td class='ok'>Connected</td></tr>");
+    html += "<tr><td>SSID</td><td>" + htmlEscape(WiFi.SSID()) + "</td></tr>";
+    html += "<tr><td>IP Address</td><td>" +
+            WiFi.localIP().toString() + "</td></tr>";
+    html += "<tr><td>Signal</td><td>" + String(rssi) + " dBm (" +
+            String(strength) + ")</td></tr>";
+    html += "<tr><td>Gateway</td><td>" +
+            WiFi.gatewayIP().toString() + "</td></tr>";
+  } else if (portalActive_) {
+    html += F("<tr><td>Status</td><td class='warn'>Setup AP (not connected)</td></tr>");
+    html += "<tr><td>AP Name</td><td>" + htmlEscape(accessPointName_) + "</td></tr>";
+    html += "<tr><td>AP IP</td><td>" + WiFi.softAPIP().toString() + "</td></tr>";
+    html += F("<tr><td>Password</td><td>stackchan</td></tr>");
+  } else {
+    html += F("<tr><td>Status</td><td class='err'>Not connected</td></tr>");
+    if (!config_.wifiSsid.isEmpty()) {
+      html += "<tr><td>Saved SSID</td><td>" +
+              htmlEscape(config_.wifiSsid) + "</td></tr>";
+    }
+  }
+
+  // Settings AP が起動中ならその情報も表示する
+  if (settingsApActive_) {
+    html += "<tr><td>Settings AP</td><td class='ok'>" +
+            htmlEscape(accessPointName_) + "<br><span class='sub'>" +
+            WiFi.softAPIP().toString() + " / pass: stackchan</span></td></tr>";
+  }
+  html += F("</table></div>");
+
+  // --- TTS サーバ設定 ---
+  html += F("<div class='card'><h3>TTS Server</h3><table>");
+  html += "<tr><td>Engine</td><td>" +
+          htmlEscape(config_.ttsEngineType) + "</td></tr>";
+  html += "<tr><td>Host</td><td>" + htmlEscape(config_.ttsHost) + "</td></tr>";
+  html += "<tr><td>Port</td><td>" + String(config_.ttsPort) + "</td></tr>";
+  html += "<tr><td>Speaker ID</td><td>" +
+          htmlEscape(config_.ttsSpeaker) + "</td></tr>";
+
+  // TTS URL を表示（同一LAN接続時のみクリック可能）
+  if (isConnected()) {
+    const String ttsUrl = "http://" + config_.ttsHost + ":" +
+                          String(config_.ttsPort) + "/";
+    html += "<tr><td>URL</td><td><a href='" + htmlEscape(ttsUrl) +
+            "' style='color:#8fd3ff'>" + htmlEscape(ttsUrl) + "</a></td></tr>";
+  }
+  html += F("</table></div>");
+
+  // --- アプリ状態 ---
+  html += F("<div class='card'><h3>App</h3><table>");
+  html += "<tr><td>Mode</td><td>" +
+          htmlEscape(runtimeStatus_.appMode) + "</td></tr>";
+  html += String("<tr><td>Servo Cal</td><td class='") +
+          (runtimeStatus_.servoCalibrated ? "ok'>OK" : "warn'>Not calibrated") +
+          "</td></tr>";
+  html += String("<tr><td>IMU Cal</td><td class='") +
+          (runtimeStatus_.imuCalibrated ? "ok'>OK" : "warn'>Not calibrated") +
+          "</td></tr>";
+  html += F("</table></div>");
+
+  // --- システム情報 ---
+  const uint32_t uptimeSec = millis() / 1000;
+  char uptime[16];
+  snprintf(uptime, sizeof(uptime), "%02lu:%02lu:%02lu",
+           (unsigned long)(uptimeSec / 3600),
+           (unsigned long)((uptimeSec % 3600) / 60),
+           (unsigned long)(uptimeSec % 60));
+  const uint32_t freeHeap = ESP.getFreeHeap();
+
+  html += F("<div class='card'><h3>System</h3><table>");
+  html += "<tr><td>Uptime</td><td>" + String(uptime) + "</td></tr>";
+  html += "<tr><td>Free Heap</td><td>" + String(freeHeap / 1024) +
+          " KB <span class='sub'>(" + String(freeHeap) + " B)</span></td></tr>";
+  html += "<tr><td>CPU Freq</td><td>" +
+          String(ESP.getCpuFreqMHz()) + " MHz</td></tr>";
+  html += "<tr><td>Flash Size</td><td>" +
+          String(ESP.getFlashChipSize() / 1024 / 1024) + " MB</td></tr>";
+  html += F("</table></div>");
+
+  html += F("<p class='sub'>Auto-refreshes every 5 seconds</p>"
+            "</body></html>");
   return html;
 }
 
 // 周辺のWiFiをスキャンして<option>タグのリストを生成する。
 // 重複SSIDを除外し、電波強度・セキュリティ情報を付記する。
+// 保存済みSSIDが見つかれば selected 属性を付けて事前選択する。
 String ConfigPortal::wifiOptionsHtml() {
   String options;
   options.reserve(2000);
 
-  // false=非同期スキャン無効（同期スキャン）, true=隠しSSIDを含む
   const int count = WiFi.scanNetworks(false, true);
   if (count <= 0) {
     options += F("<option value=''>No Wi-Fi networks found</option>");
@@ -314,10 +478,10 @@ String ConfigPortal::wifiOptionsHtml() {
   for (int i = 0; i < count; ++i) {
     const String ssid = WiFi.SSID(i);
     if (ssid.isEmpty()) {
-      continue; // 隠しSSIDはスキップ（SSIDが空で返ってくる場合）
+      continue;
     }
 
-    // 同じSSIDが複数のAPで見つかった場合は最初の1件のみ表示する
+    // 重複SSIDは除外する
     bool duplicate = false;
     for (int previous = 0; previous < i; ++previous) {
       if (WiFi.SSID(previous) == ssid) {
@@ -325,37 +489,30 @@ String ConfigPortal::wifiOptionsHtml() {
         break;
       }
     }
-    if (duplicate) {
-      continue;
-    }
+    if (duplicate) continue;
 
-    // 電波強度をRSSI(dBm)で分類: -55以上=strong, -70以上=medium, それ以下=weak
     const int32_t rssi = WiFi.RSSI(i);
     const char* strength =
         rssi >= -55 ? "strong" : (rssi >= -70 ? "medium" : "weak");
     const bool secured = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
-    const bool selected = ssid == config_.wifiSsid; // 現在の接続先をデフォルト選択
+    const bool selected = ssid == config_.wifiSsid;
     currentSsidFound |= selected;
 
     options += "<option value='" + htmlEscape(ssid) + "'";
-    if (selected) {
-      options += F(" selected");
-    }
-    options += ">" + htmlEscape(ssid) + " (" + strength + ", " +
-               String(rssi) + " dBm";
-    if (secured) {
-      options += F(", secured");
-    }
+    if (selected) options += F(" selected");
+    options += ">" + htmlEscape(ssid) + " (" + String(strength) +
+               ", " + String(rssi) + " dBm";
+    if (secured) options += F(", secured");
     options += F(")</option>");
   }
 
-  // 保存済みSSIDがスキャン結果に含まれない場合（圏外など）は末尾に追加する
+  // 保存済みSSIDがスキャン結果にない場合（圏外など）は末尾に追加する
   if (!config_.wifiSsid.isEmpty() && !currentSsidFound) {
     options += "<option value='" + htmlEscape(config_.wifiSsid) +
                "' selected>" + htmlEscape(config_.wifiSsid) +
-               " (saved)</option>";
+               " (saved, not in range)</option>";
   }
 
-  WiFi.scanDelete(); // スキャン結果のメモリを解放する
+  WiFi.scanDelete();
   return options;
 }
