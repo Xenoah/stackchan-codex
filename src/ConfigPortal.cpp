@@ -35,6 +35,24 @@ String sanitizedTtsEngineType(const String& value) {
   return value == "simple_wav" ? "simple_wav" : "voicevox_compatible";
 }
 
+// 文字列をJSON文字列値としてエスケープする（"\ と制御文字を処理）。
+String jsonEscape(const String& value) {
+  String out;
+  out.reserve(value.length() + 8);
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char c = value[i];
+    switch (c) {
+      case '"':  out += F("\\\""); break;
+      case '\\': out += F("\\\\"); break;
+      case '\n': out += F("\\n"); break;
+      case '\r': out += F("\\r"); break;
+      case '\t': out += F("\\t"); break;
+      default:   out += c; break;
+    }
+  }
+  return out;
+}
+
 // <option> タグの selected 属性を返す（現在の値と一致する場合のみ付与）
 String selectedAttribute(const String& value, const char* option) {
   if (value == option) {
@@ -125,6 +143,15 @@ String ConfigPortal::accessPointName() const {
 
 void ConfigPortal::setRuntimeStatus(const RuntimeStatus& status) {
   runtimeStatus_ = status;
+}
+
+void ConfigPortal::setSpeakRequestHandler(
+    std::function<bool(const String&)> handler) {
+  speakRequestFn_ = handler;
+}
+
+void ConfigPortal::setSpeakingProbe(std::function<bool()> probe) {
+  speakingProbe_ = probe;
 }
 
 // SETTINGSメニューを開いたときに呼ぶ。
@@ -260,6 +287,30 @@ void ConfigPortal::registerRoutes() {
   // GET /status → システム状態ページ（5秒自動更新）
   server_.on("/status", HTTP_GET, [this]() {
     server_.send(200, "text/html; charset=utf-8", statusHtml());
+  });
+
+  // POST /api/speak → Gateway からの発話指示（ブラウザ送信→自動発話）。
+  // 任意の text フォーム引数、または text/plain 本文で発話テキストを指定できる。
+  // 話し中なら busy を返す。受け付けたら ok:true（実際の再生は loop() 側）。
+  server_.on("/api/speak", HTTP_POST, [this]() {
+    String text;
+    if (server_.hasArg("text")) {
+      text = server_.arg("text");
+    } else if (server_.hasArg("plain")) {
+      text = server_.arg("plain"); // text/plain 本文
+    }
+    const bool accepted = speakRequestFn_ ? speakRequestFn_(text) : false;
+    if (accepted) {
+      server_.send(200, "application/json", "{\"ok\":true}");
+    } else {
+      server_.send(200, "application/json",
+                   "{\"ok\":false,\"error\":\"busy\"}");
+    }
+  });
+
+  // GET /api/status → デバイス状態をJSONで返す（Gateway の疎通確認用）
+  server_.on("/api/status", HTTP_GET, [this]() {
+    server_.send(200, "application/json", apiStatusJson());
   });
 }
 
@@ -515,4 +566,33 @@ String ConfigPortal::wifiOptionsHtml() {
 
   WiFi.scanDelete();
   return options;
+}
+
+// GET /api/status が返すJSONを生成する。
+// 項目: ok, connected, speaking, ip, tts_host, tts_port, tts_engine
+String ConfigPortal::apiStatusJson() {
+  const bool spk = speakingProbe_ ? speakingProbe_() : false;
+  String ip;
+  if (isConnected()) {
+    ip = WiFi.localIP().toString();
+  } else if (portalActive_ || settingsApActive_) {
+    ip = WiFi.softAPIP().toString();
+  }
+
+  String j;
+  j.reserve(220);
+  j += F("{\"ok\":true,\"connected\":");
+  j += isConnected() ? F("true") : F("false");
+  j += F(",\"speaking\":");
+  j += spk ? F("true") : F("false");
+  j += F(",\"ip\":\"");
+  j += ip;
+  j += F("\",\"tts_host\":\"");
+  j += jsonEscape(config_.ttsHost);
+  j += F("\",\"tts_port\":");
+  j += String(config_.ttsPort);
+  j += F(",\"tts_engine\":\"");
+  j += jsonEscape(config_.ttsEngineType);
+  j += F("\"}");
+  return j;
 }

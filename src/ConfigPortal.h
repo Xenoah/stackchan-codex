@@ -5,6 +5,8 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include <functional>
+
 // アプリ全体で共有する設定値。NVSから読み込み・保存される。
 struct AppConfig {
   String wifiSsid;                              // 接続先WiFiのSSID
@@ -76,6 +78,14 @@ class ConfigPortal {
   // /statusページに表示するアプリ実行時の状態を更新する（serviceApp()から定期呼び出し）
   void setRuntimeStatus(const RuntimeStatus& status);
 
+  // POST /api/speak のハンドラを登録する。
+  // 引数: 発話テキスト（空なら呼び出し側で既定値を使う）。
+  // 戻り値: 受け付けた=true、話し中などで拒否=false（busy）。
+  void setSpeakRequestHandler(std::function<bool(const String&)> handler);
+
+  // GET /api/status の speaking フィールド用に、現在の発話状態を返すプローブを登録する。
+  void setSpeakingProbe(std::function<bool()> probe);
+
  private:
   Preferences preferences_;          // ESP32 NVS（不揮発ストレージ）アクセス
   WebServer server_{80};             // ポート80のHTTPサーバ
@@ -84,6 +94,10 @@ class ConfigPortal {
   bool portalActive_ = false;        // セットアップAPが起動中かどうか
   bool settingsApActive_ = false;    // SETTINGSメニュー用APが起動中かどうか
   String accessPointName_;           // APのSSID名（例: "StackChan-Setup-AABBCC"）
+
+  // Gateway 連携用コールバック
+  std::function<bool(const String&)> speakRequestFn_; // POST /api/speak 受付
+  std::function<bool()> speakingProbe_;               // GET /api/status の speaking
 
   // NVSから設定を読み込む
   void load();
@@ -111,4 +125,7 @@ class ConfigPortal {
 
   // WiFiスキャン結果を<option>タグのリストとして返す
   String wifiOptionsHtml();
+
+  // GET /api/status が返す JSON 文字列を生成する
+  String apiStatusJson();
 };
