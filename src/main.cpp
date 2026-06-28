@@ -321,8 +321,10 @@ enum class BodyMotionState {
 constexpr uint32_t BODY_MOTION_UPDATE_INTERVAL_MS = 80;
 constexpr int BODY_IDLE_SERVO_SPEED = 160;       // 16.0度/秒
 constexpr int BODY_JOY_SERVO_SPEED = 720;        // 72.0度/秒
-constexpr int BODY_IDLE_YAW_AMPLITUDE = 35;      // 3.5度
-constexpr int BODY_IDLE_PITCH_AMPLITUDE = 16;    // 1.6度
+constexpr int BODY_HOME_YAW = 0;                 // 正面
+constexpr int BODY_HOME_PITCH = 200;             // 20.0度上向き
+constexpr int BODY_IDLE_YAW_AMPLITUDE = 18;      // 1.8度
+constexpr int BODY_IDLE_PITCH_AMPLITUDE = 7;     // 0.7度
 constexpr int BODY_JOY_YAW_AMPLITUDE = 300;      // 30.0度
 constexpr uint32_t BODY_JOY_DURATION_MS = 4800;  // 左右3往復を柔らかく
 constexpr float BODY_JOY_CYCLES = 3.0f;
@@ -377,6 +379,14 @@ int clampBodyPitch(int value) {
   return constrain(value, calibration.pitchMin, calibration.pitchMax);
 }
 
+int bodyHomeYaw() {
+  return clampBodyYaw(BODY_HOME_YAW);
+}
+
+int bodyHomePitch() {
+  return clampBodyPitch(BODY_HOME_PITCH);
+}
+
 bool bodyMotionCanUseServo() {
   return calibrationController.data().servoValid &&
          currentMode == AppMode::LocalLlm &&
@@ -420,10 +430,10 @@ bool startBodyMotion(bool ignoreAutoStartSkip = false) {
   delay(40);
 
   const auto angles = M5StackChan.Motion.getCurrentAngles();
-  bodyMotionYawBase = clampBodyYaw(angles.x);
-  bodyMotionPitchBase = clampBodyPitch(angles.y);
-  bodyMotionYawTarget = bodyMotionYawBase;
-  bodyMotionPitchTarget = bodyMotionPitchBase;
+  bodyMotionYawBase = bodyHomeYaw();
+  bodyMotionPitchBase = bodyHomePitch();
+  bodyMotionYawTarget = clampBodyYaw(angles.x);
+  bodyMotionPitchTarget = clampBodyPitch(angles.y);
   bodyMotionStartedAt = millis();
   bodyMotionLastUpdateAt = 0;
   bodyMotionState = BodyMotionState::Idle;
@@ -431,7 +441,8 @@ bool startBodyMotion(bool ignoreAutoStartSkip = false) {
   M5StackChan.Motion.move(
       bodyMotionYawTarget, bodyMotionPitchTarget, BODY_IDLE_SERVO_SPEED);
   Serial.printf(
-      "Body motion idle started yaw=%d pitch=%d\n",
+      "Body motion idle started current=(%d,%d) home=(%d,%d)\n",
+      bodyMotionYawTarget, bodyMotionPitchTarget,
       bodyMotionYawBase, bodyMotionPitchBase);
   return true;
 }
@@ -453,9 +464,8 @@ void triggerPetHappyMotion() {
     return;
   }
 
-  const auto angles = M5StackChan.Motion.getCurrentAngles();
-  bodyJoyCenterYaw = clampBodyYaw(angles.x);
-  bodyJoyCenterPitch = clampBodyPitch(angles.y);
+  bodyJoyCenterYaw = bodyHomeYaw();
+  bodyJoyCenterPitch = bodyHomePitch();
   bodyMotionYawTarget = bodyJoyCenterYaw;
   bodyMotionPitchTarget = bodyJoyCenterPitch;
   bodyMotionStartedAt = millis();
@@ -480,10 +490,15 @@ void updateBodyMotion() {
   if (bodyMotionState == BodyMotionState::Joy) {
     const uint32_t elapsed = now - bodyMotionStartedAt;
     if (elapsed >= BODY_JOY_DURATION_MS) {
-      bodyMotionYawBase = bodyJoyCenterYaw;
-      bodyMotionPitchBase = bodyJoyCenterPitch;
+      bodyMotionYawBase = bodyHomeYaw();
+      bodyMotionPitchBase = bodyHomePitch();
+      bodyMotionYawTarget = bodyMotionYawBase;
+      bodyMotionPitchTarget = bodyMotionPitchBase;
       bodyMotionStartedAt = now;
       bodyMotionState = BodyMotionState::Idle;
+      M5StackChan.Motion.move(
+          bodyMotionYawTarget, bodyMotionPitchTarget,
+          BODY_IDLE_SERVO_SPEED);
       M5StackChan.showRgbColor(0, 48, 0);
       return;
     }
@@ -1303,7 +1318,9 @@ void setup() {
   if (servoChoice == ServoStartupChoice::Calibrate) {
     Serial.println("Servo startup choice: CALIBRATE");
     bodyMotionSkipAutoStart = true;
-    calibrationController.run(avatarFace); // フルキャリブレーション実行
+    const bool calibrationOk =
+        calibrationController.run(avatarFace); // フルキャリブレーション実行
+    bodyMotionSkipAutoStart = !calibrationOk;
   } else {
     Serial.println("Servo startup choice: NO");
     bodyMotionSkipAutoStart = false;
