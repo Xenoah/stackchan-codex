@@ -447,12 +447,70 @@ bool startBodyMotion(bool ignoreAutoStartSkip = false) {
   return true;
 }
 
+// --- ゲーミングRGB（本体LED）---
+// この時刻まではステータス色を保持し、虹色サイクルを一時停止する。
+uint32_t gamingLedHoldUntil = 0;
+// 最後に虹色LEDを更新した時刻（throttle用）
+uint32_t gamingLedLastUpdateAt = 0;
+
+// HSV(0..1) を RGB(0..255) に変換する（LED用）。
+void hsvToRgb888(float h, float s, float v, uint8_t& r, uint8_t& g,
+                 uint8_t& b) {
+  h -= floorf(h);
+  const float hf = h * 6.0f;
+  const int i = static_cast<int>(hf) % 6;
+  const float f = hf - floorf(hf);
+  const float p = v * (1.0f - s);
+  const float q = v * (1.0f - f * s);
+  const float t = v * (1.0f - (1.0f - f) * s);
+  float rf = 0, gf = 0, bf = 0;
+  switch (i) {
+    case 0: rf = v; gf = t; bf = p; break;
+    case 1: rf = q; gf = v; bf = p; break;
+    case 2: rf = p; gf = v; bf = t; break;
+    case 3: rf = p; gf = q; bf = v; break;
+    case 4: rf = t; gf = p; bf = v; break;
+    default: rf = v; gf = p; bf = q; break;
+  }
+  r = static_cast<uint8_t>(rf * 255.0f);
+  g = static_cast<uint8_t>(gf * 255.0f);
+  b = static_cast<uint8_t>(bf * 255.0f);
+}
+
+// ステータス色をLEDに表示する。ゲーミングRGB有効時は holdMs の間その色を
+// 保持してから虹色サイクルへ戻る（TTS/エラー等の状態表示を残すため）。
+void showStatusLed(uint8_t r, uint8_t g, uint8_t b,
+                   uint32_t holdMs = 1800) {
+  M5StackChan.showRgbColor(r, g, b);
+  gamingLedHoldUntil = millis() + holdMs;
+}
+
+// ゲーミングRGB有効時に、本体LEDを虹色でゆっくり循環させる（serviceApp から毎フレーム）。
+// 顔(avatarFace)の虹色フェーズに色相を合わせて、画面とLEDの色を揃える。
+void updateGamingLed(uint32_t now) {
+  if (!configPortal.config().gamingRgb) {
+    return;
+  }
+  if (static_cast<int32_t>(now - gamingLedHoldUntil) < 0) {
+    return; // ステータス色を保持中
+  }
+  if (now - gamingLedLastUpdateAt < 40) {
+    return; // 約25fpsにthrottle
+  }
+  gamingLedLastUpdateAt = now;
+
+  uint8_t r, g, b;
+  // LEDは眩しすぎないよう明度を抑える（V=0.3）。色相は顔と同期。
+  hsvToRgb888(avatarFace.gamingHue(), 1.0f, 0.30f, r, g, b);
+  M5StackChan.showRgbColor(r, g, b);
+}
+
 void triggerPetHappyMotion() {
   ignoreNextTopClick = true;
   avatarFace.setExpression(m5avatar::Expression::Happy);
   avatarFace.showStatus("HAPPY", 1000);
   avatarFace.returnToDefaultAfter(BODY_JOY_DURATION_MS + 800);
-  M5StackChan.showRgbColor(96, 24, 72);
+  showStatusLed(96, 24, 72);
 
   if (!calibrationController.data().servoValid ||
       currentMode != AppMode::LocalLlm ||
@@ -502,7 +560,7 @@ void updateBodyMotion() {
       M5StackChan.Motion.move(
           bodyMotionYawTarget, bodyMotionPitchTarget,
           BODY_IDLE_SERVO_SPEED);
-      M5StackChan.showRgbColor(0, 48, 0);
+      showStatusLed(0, 48, 0);
       return;
     }
 
@@ -548,7 +606,7 @@ bool startLevelHoldMode() {
     avatarFace.setExpression(m5avatar::Expression::Doubt);
     avatarFace.showStatus("CAL REQUIRED", 2500);
     avatarFace.returnToDefaultAfter(2500);
-    M5StackChan.showRgbColor(96, 48, 0); // 橙色LED: キャリブレーション必要
+    showStatusLed(96, 48, 0); // 橙色LED: キャリブレーション必要
     return false;
   }
 
@@ -569,7 +627,7 @@ bool startLevelHoldMode() {
   currentMode = AppMode::LevelHold;
   avatarFace.resetToDefault();
   avatarFace.showStatus("LEVEL HOLD", 1800);
-  M5StackChan.showRgbColor(0, 64, 96); // 水色LED: LEVEL HOLD動作中
+  showStatusLed(0, 64, 96); // 水色LED: LEVEL HOLD動作中
   Serial.println("Mode changed: LEVEL HOLD");
   return true;
 }
@@ -601,7 +659,7 @@ void activateMode(AppMode mode) {
   currentMode = AppMode::LocalLlm;
   avatarFace.resetToDefault();
   avatarFace.showStatus("LOCAL LLM", 1800);
-  M5StackChan.showRgbColor(0, 48, 0); // 緑色LED: 通常動作
+  showStatusLed(0, 48, 0); // 緑色LED: 通常動作
   startBodyMotion();
   Serial.println("Mode changed: LOCAL LLM");
 }
@@ -760,6 +818,7 @@ void serviceApp() {
   avatarFace.update();     // アバターのステータス・まばたき・ショーケース更新
   updateLipSync();         // 口パクアニメーション更新
   updateActiveMode();      // LEVEL HOLDなどのモード固有処理
+  updateGamingLed(millis()); // ゲーミングRGB（本体LEDの虹色循環）
 
   // 空きヒープの最小値を毎フレーム追跡する（断片化・リーク検出用）
   const uint32_t freeHeapNow = ESP.getFreeHeap();
@@ -815,7 +874,7 @@ void speakText(const String& text) {
   speaking = true;
   avatarFace.setExpression(m5avatar::Expression::Happy);
   avatarFace.showStatus("TTS", 900);
-  M5StackChan.showRgbColor(0, 0, 96); // 青色LED: TTS通信中
+  showStatusLed(0, 0, 96); // 青色LED: TTS通信中
 
   // 設定値からTTSリクエストを構築する
   const AppConfig& appConfig = configPortal.config();
@@ -831,12 +890,12 @@ void speakText(const String& text) {
 
   if (success) {
     avatarFace.resetToDefault();
-    M5StackChan.showRgbColor(0, 48, 0); // 緑色LED: 正常
+    showStatusLed(0, 48, 0); // 緑色LED: 正常
   } else {
     avatarFace.setExpression(m5avatar::Expression::Angry);
     avatarFace.showStatus("TTS ERROR", 2500);
     avatarFace.returnToDefaultAfter(2500);
-    M5StackChan.showRgbColor(96, 0, 0); // 赤色LED: エラー
+    showStatusLed(96, 0, 0, 3000); // 赤色LED: エラー（3秒保持）
     Serial.printf("TTS error: %s\n", ttsClient.lastError().c_str());
   }
 
@@ -1355,13 +1414,16 @@ void setup() {
   Serial.println("Starting network configuration...");
   const bool wifiConnected = configPortal.begin();
 
+  // ゲーミングRGB（顔の虹色循環）を設定値に従って有効化する
+  avatarFace.setGamingRgb(configPortal.config().gamingRgb);
+
   if (!wifiConnected) {
     // WiFi接続失敗: セットアップAPモードで起動
     Serial.printf("Setup AP: %s, http://192.168.4.1\n",
                   configPortal.accessPointName().c_str());
     avatarFace.resetToDefault();
     avatarFace.showStatus("SETUP: 192.168.4.1", 0); // 常時表示
-    M5StackChan.showRgbColor(48, 32, 0); // 橙色LED: セットアップ待ち
+    showStatusLed(48, 32, 0); // 橙色LED: セットアップ待ち
     return; // ループに入る（APモードではメニューは使えない）
   }
 
@@ -1376,7 +1438,7 @@ void setup() {
 
   avatarFace.resetToDefault();
   avatarFace.showStatus("LOCAL LLM");
-  M5StackChan.showRgbColor(0, 48, 0); // 緑色LED: 正常動作中
+  showStatusLed(0, 48, 0); // 緑色LED: 正常動作中
   startBodyMotion();
   Serial.println("Mode default: LOCAL LLM");
 }

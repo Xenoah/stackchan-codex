@@ -136,6 +136,17 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 
 ---
 
+## Part D: 設定画面チャットUI・ゲーミングRGB（2026-06-28 / v1.1.5）
+
+| # | 項目 | 内容 | 状態 |
+|---|------|------|------|
+| D1 | Local LLM Chat UI | ConfigPortal の設定ページ（`GET /`）に「Local LLM Chat」カードを追加。textarea（初期値「自己紹介して」）+ ボタン「LLMで回答して喋る」+ status + 回答用 `<pre>`。ブラウザの `fetch` が `http://<tts_host>:<tts_port>/ask` へ `application/x-www-form-urlencoded` の `text` をPOSTし、JSON（`question`/`answer`/`stackchan`）を整形表示。**ESP32側に中継APIは作らない**（メモリ節約のためJSON処理はブラウザ側）。送信中 `thinking...`、エラー時 `fetch error: 詳細`。Gateway URL は保存済み `config_.ttsHost`/`ttsPort` をJSへ埋め込み。Gateway は `Access-Control-Allow-Origin: *` 前提 | ✅ |
+| D2 | ゲーミングRGB（画面） | `AvatarFaceController` に虹色循環を追加。`update()` 末尾で `updateGamingPalette()`（約6秒で1周・約30fps throttle）。colorDepth=1 の2トーン描画に合わせ、背景=虹色／前景=補色で循環。`setGamingRgb(bool)`/`isGamingRgb()`/`gamingHue()` を公開。OFFで通常パレットへ即復帰 | ✅ |
+| D3 | ゲーミングRGB（LED） | `main.cpp` の `serviceApp()` から `updateGamingLed()` を毎フレーム実行。色相は `avatarFace.gamingHue()` と同期、明度控えめ。ステータスLEDは `showStatusLed(r,g,b,holdMs)` 経由に置換し、指定時間だけ色を保持してから虹色へ戻す（TTS=青/エラー=赤(3秒)/通常=緑 等の意味を維持） | ✅ |
+| D4 | 設定永続化・UI | `AppConfig.gamingRgb`（既定true）を追加。NVSキー `gaming_rgb` で load/save。設定ページにチェックボックス「Gaming RGB (rainbow face & LED)」、`/status` の App カードに On/Off 表示。起動時 `configPortal.begin()` 後に `avatarFace.setGamingRgb(config.gamingRgb)` で反映 | ✅ |
+
+---
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。
@@ -145,3 +156,7 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
   スプライト確保が断片化要因と特定し colorDepth=1 へ修正(C1)。診断表示(C2)、漢字読み整形(C3)、
   ピッチ既定上げ(C4)、口/呼吸の誇張(C5)、カメラ目線(C6) を実装。ファーム build 成功
   （RAM 19.5%, Flash 19.1%）。Gateway py_compile OK。
+- 2026-06-28: 設定画面に Local LLM Chat UI(D1) を追加（ブラウザ直 fetch、ESP32中継なし）。
+  ゲーミングRGB(D2–D4) を実装：顔(画面)＋本体LEDを虹色循環、設定ON/OFF・NVS保存。
+  ファーム build 成功（RAM 18.2%, Flash 18.4%）。**v1.1.5（Gaming RGB Edition）としてリリース**。
+  README.md / CLAUDE.md / CHANGELOG.md を更新。

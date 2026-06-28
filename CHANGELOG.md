@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [v1.1.5] - 2026-06-28
+
+Gaming RGB Edition。設定画面からのローカルLLMチャットUIと、顔・本体LEDの
+虹色循環演出を追加したリリースです。
+
+### Added
+
+- 設定ページに **Local LLM Chat** カードを追加。ブラウザの `fetch` から直接
+  Android Gateway の `http://<TTS Host>:<TTS Port>/ask` へ質問をPOSTし、
+  LLM回答（`question` / `answer` / `stackchan`）を画面表示しつつStackChanに発話させる
+  （ESP32側に中継APIは作らず、JSON処理はブラウザ側で実施）
+- **Gaming RGB**: 顔（画面）と本体LEDを虹色にゆっくり循環させる演出
+  （約6秒で1周、顔とLEDの色相を同期、colorDepth=1の2トーン描画では背景と前景を
+  補色関係で循環）
+- Gaming RGB の有効/無効を設定ページのチェックボックスで切り替え（NVS `gaming_rgb` に保存）
+- `/status` ページの App カードに Gaming RGB の On/Off 表示を追加
+
+### Changed
+
+- ステータスLED表示を `showStatusLed()` 経由へ変更し、Gaming RGB有効時はイベント色を
+  一定時間保持してから虹色サイクルへ復帰（状態表示の意味を維持）
+
+## [β0.2.7 - v1.1.0] - 中間リリース
+
+タグ `β0.2.7` 〜 `v1.1.0` でリリース済み。主な追加は以下（詳細は各リリースノート参照）。
+
 ### Added
 
 - 起動ごとに全キャリブレーション実行を確認する `YES / NO` タッチUI
@@ -90,6 +116,7 @@ M5Stack-Avatarによる顔機能の全面実装と、起動時に顔が表示さ
 - サーボ、カメラ、NFC、IR等はライブラリ準備段階
 - β版のためAPIや設定項目は今後変更される可能性あり
 
-[Unreleased]: https://github.com/Xenoah/stackchan-codex/compare/v0.2.5-beta.1...HEAD
+[Unreleased]: https://github.com/Xenoah/stackchan-codex/compare/v1.1.5...HEAD
+[v1.1.5]: https://github.com/Xenoah/stackchan-codex/releases/tag/v1.1.5
 [β0.2.5]: https://github.com/Xenoah/stackchan-codex/releases/tag/v0.2.5-beta.1
 [β0.1.0]: https://github.com/Xenoah/stackchan-codex/releases/tag/v0.1.0-beta.1

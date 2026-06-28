@@ -198,6 +198,7 @@ void ConfigPortal::load() {
   config_.speechText =
       preferences_.getString("speech", config_.speechText);
   config_.cameraGaze = preferences_.getBool("cam_gaze", config_.cameraGaze);
+  config_.gamingRgb = preferences_.getBool("gaming_rgb", config_.gamingRgb);
   preferences_.end();
 }
 
@@ -212,6 +213,7 @@ void ConfigPortal::save() {
   preferences_.putString("tts_engine", config_.ttsEngineType);
   preferences_.putString("speech", config_.speechText);
   preferences_.putBool("cam_gaze", config_.cameraGaze);
+  preferences_.putBool("gaming_rgb", config_.gamingRgb);
   preferences_.end();
 }
 
@@ -280,6 +282,7 @@ void ConfigPortal::registerRoutes() {
     config_.speechText = server_.arg("speech");
     // チェックボックスは未チェック時にPOSTされないため、存在で判定する
     config_.cameraGaze = server_.hasArg("camera_gaze");
+    config_.gamingRgb = server_.hasArg("gaming_rgb");
     save();
 
     server_.send(200, "text/html; charset=utf-8",
@@ -396,6 +399,18 @@ String ConfigPortal::pageHtml(const String& message) {
            "<p class='hint'>Uses the front camera. On CoreS3 the camera shares "
            "the internal I2C bus with the touch screen; if touch becomes "
            "unresponsive, turn this OFF and save.</p>");
+
+  // --- ゲーミングRGB（顔と本体LEDを虹色に循環）---
+  html += F("<label style='margin-top:16px'>"
+            "<input type='checkbox' name='gaming_rgb' value='1' "
+            "style='width:auto;margin-right:8px'");
+  if (config_.gamingRgb) {
+    html += F(" checked");
+  }
+  html += F(">Gaming RGB (rainbow face &amp; LED)</label>"
+           "<p class='hint'>Cycles the avatar face and the body LED through "
+           "rainbow colors. Turn OFF for the normal two-tone face and "
+           "status-colored LED.</p>");
 
   html += F("<button type='submit'>Save &amp; Restart</button></form>"
             "<p style='color:#555;font-size:0.85em;margin-top:20px'>"
@@ -566,6 +581,9 @@ String ConfigPortal::statusHtml() {
           "</td></tr>";
   html += String("<tr><td>Camera Gaze</td><td class='") +
           (runtimeStatus_.cameraActive ? "ok'>Active" : "warn'>Off") +
+          "</td></tr>";
+  html += String("<tr><td>Gaming RGB</td><td class='") +
+          (config_.gamingRgb ? "ok'>On" : "warn'>Off") +
           "</td></tr>";
   html += F("</table></div>");
 

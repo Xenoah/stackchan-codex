@@ -53,6 +53,37 @@ constexpr uint32_t kBlinkIntervalMaxMs = 10000;
 constexpr uint32_t kBlinkClosedMinMs = 100;
 constexpr uint32_t kBlinkClosedMaxMs = 180;
 
+// ゲーミングRGBの1周期（虹色を一巡する時間）: 6秒
+constexpr uint32_t kGamingCyclePeriodMs = 6000;
+
+// ゲーミングRGBのパレット更新間隔（throttle）: 約30fps
+constexpr uint32_t kGamingUpdateIntervalMs = 33;
+
+// HSV(0..1) を RGB565(16bit) に変換する。ゲーミング虹色パレット生成に使う。
+uint16_t hsvToRgb565(float h, float s, float v) {
+  h -= floorf(h); // 0..1 に正規化
+  const float hf = h * 6.0f;
+  const int i = static_cast<int>(hf) % 6;
+  const float f = hf - floorf(hf);
+  const float p = v * (1.0f - s);
+  const float q = v * (1.0f - f * s);
+  const float t = v * (1.0f - (1.0f - f) * s);
+  float rf = 0, gf = 0, bf = 0;
+  switch (i) {
+    case 0: rf = v; gf = t; bf = p; break;
+    case 1: rf = q; gf = v; bf = p; break;
+    case 2: rf = p; gf = v; bf = t; break;
+    case 3: rf = p; gf = q; bf = v; break;
+    case 4: rf = t; gf = p; bf = v; break;
+    default: rf = v; gf = p; bf = q; break;
+  }
+  const uint8_t r = static_cast<uint8_t>(rf * 255.0f);
+  const uint8_t g = static_cast<uint8_t>(gf * 255.0f);
+  const uint8_t b = static_cast<uint8_t>(bf * 255.0f);
+  return static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) |
+                               (b >> 3));
+}
+
 // インデックスを循環させるヘルパー（負の方向にも対応）
 size_t wrapIndex(size_t current, int direction, size_t count) {
   const int next = static_cast<int>(current) + direction;
@@ -134,6 +165,9 @@ void AvatarFaceController::update() {
   }
 
   updateBlink(now);
+
+  // ゲーミングRGB（虹色循環）。有効時は毎フレーム末尾でパレットを更新する。
+  updateGamingPalette(now);
 }
 
 // 表情を指定した種類に直接設定する（インデックスを検索して適用）
@@ -200,6 +234,53 @@ void AvatarFaceController::setGaze(float vertical, float horizontal) {
   horizontal = constrain(horizontal, -1.0f, 1.0f);
   avatar_.setRightGaze(vertical, horizontal);
   avatar_.setLeftGaze(vertical, horizontal);
+}
+
+// ゲーミングRGBのON/OFFを切り替える。
+// OFFにしたときは現在選択中のパレットを再適用して通常表示へ戻す。
+void AvatarFaceController::setGamingRgb(bool enabled) {
+  if (gamingRgb_ == enabled) {
+    return;
+  }
+  gamingRgb_ = enabled;
+  if (!gamingRgb_) {
+    applyPalette(); // 通常パレットへ復帰
+  } else {
+    lastGamingUpdateAt_ = 0; // 次のupdate()で即座に虹色を適用
+  }
+}
+
+bool AvatarFaceController::isGamingRgb() const {
+  return gamingRgb_;
+}
+
+float AvatarFaceController::gamingHue() const {
+  return gamingHue_;
+}
+
+// ゲーミングRGB有効時、時間に応じた虹色を顔のパレットに適用する。
+// colorDepth=1（2トーン）描画のため、背景色と前景色を補色関係で循環させて
+// コントラストを保ちつつ派手に色を変化させる。負荷軽減のためthrottleする。
+void AvatarFaceController::updateGamingPalette(uint32_t now) {
+  if (!gamingRgb_) {
+    return;
+  }
+  if (lastGamingUpdateAt_ != 0 &&
+      now - lastGamingUpdateAt_ < kGamingUpdateIntervalMs) {
+    return;
+  }
+  lastGamingUpdateAt_ = now;
+
+  gamingHue_ =
+      static_cast<float>(now % kGamingCyclePeriodMs) / kGamingCyclePeriodMs;
+
+  // 背景: 濃いめの虹色 / 前景(目・口): 補色の明るい虹色
+  const uint16_t background = hsvToRgb565(gamingHue_, 1.0f, 0.6f);
+  const uint16_t primary = hsvToRgb565(gamingHue_ + 0.5f, 1.0f, 1.0f);
+  gamingPalette_.set(COLOR_BACKGROUND, background);
+  gamingPalette_.set(COLOR_PRIMARY, primary);
+  gamingPalette_.set(COLOR_SECONDARY, primary);
+  avatar_.setColorPalette(gamingPalette_);
 }
 
 // ステータステキストを表示する。

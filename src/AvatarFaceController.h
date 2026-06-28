@@ -58,6 +58,16 @@ class AvatarFaceController {
   // 視線方向を設定する（-1.0〜+1.0、両目同時）
   void setGaze(float vertical, float horizontal);
 
+  // ゲーミングRGB（顔を虹色にゆっくり循環させる演出）のON/OFFを切り替える。
+  // OFFにすると現在のカラーパレットを即座に再適用して通常表示に戻す。
+  void setGamingRgb(bool enabled);
+
+  // ゲーミングRGBが有効かどうか
+  bool isGamingRgb() const;
+
+  // 現在のゲーミング虹色フェーズ（0.0〜1.0）を返す。本体LEDと色を合わせるのに使う。
+  float gamingHue() const;
+
   // ステータステキストを表示する。durationMs=0で常時表示。
   void showStatus(const char* text, uint32_t durationMs = 1400);
 
@@ -107,6 +117,7 @@ class AvatarFaceController {
   m5avatar::Avatar avatar_;                     // アバター本体（描画・アニメーション管理）
   m5avatar::Face* faces_[kFaceCount] = {};      // 顔型オブジェクトの配列
   m5avatar::ColorPalette palettes_[kPaletteCount]; // カラーパレットの配列
+  m5avatar::ColorPalette gamingPalette_;        // ゲーミングRGB用の動的パレット
 
   size_t expressionIndex_ = 5;        // 現在の表情インデックス（5=Neutral）
   size_t faceIndex_ = 0;              // 現在の顔型インデックス（0=Default）
@@ -118,6 +129,9 @@ class AvatarFaceController {
   bool drawingPaused_ = false;    // 描画タスクが一時停止中かどうか
   bool showcaseEnabled_ = false;  // ショーケースモードが有効かどうか
   bool blinkClosed_ = false;      // まばたき中（目を閉じている）かどうか
+  bool gamingRgb_ = false;        // ゲーミングRGB（虹色循環）が有効かどうか
+  uint32_t lastGamingUpdateAt_ = 0; // 最後に虹色パレットを更新した時刻（throttle用）
+  float gamingHue_ = 0.0f;        // 現在の虹色フェーズ（0.0〜1.0）
   uint32_t nextShowcaseAt_ = 0;   // 次のショーケース更新時刻（millis）
   uint32_t statusClearAt_ = 0;    // ステータステキストを消す時刻（0=消さない）
   uint32_t defaultReturnAt_ = 0;  // デフォルトに戻る時刻（0=タイマーなし）
@@ -144,6 +158,9 @@ class AvatarFaceController {
 
   // transformPatternIndex_に対応する変形をアバターに適用する
   void applyTransform();
+
+  // ゲーミングRGB有効時に、虹色パレットを更新してアバターへ適用する（throttle付き）
+  void updateGamingPalette(uint32_t now);
 
   // ショーケースモードで次のパターンに進める
   void advanceShowcase();

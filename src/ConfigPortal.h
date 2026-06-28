@@ -22,6 +22,10 @@ struct AppConfig {
   // CoreS3 ではカメラと内部I2C（タッチ等）がバスを共有するため、
   // タッチが効かなくなる/不安定な場合はこのスイッチをOFFにする。
   bool cameraGaze = true;
+
+  // ゲーミングRGB演出。ONにすると顔（画面）と本体LEDが虹色にゆっくり循環する。
+  // OFFにすると通常の2トーン表示＋ステータス色LEDに戻る。
+  bool gamingRgb = true;
 };
 
 // /statusページに表示するアプリ実行時の状態。
