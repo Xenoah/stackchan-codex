@@ -323,14 +323,13 @@ constexpr int BODY_IDLE_SERVO_SPEED = 160;       // 16.0度/秒
 constexpr int BODY_JOY_SERVO_SPEED = 720;        // 72.0度/秒
 constexpr int BODY_IDLE_YAW_AMPLITUDE = 35;      // 3.5度
 constexpr int BODY_IDLE_PITCH_AMPLITUDE = 16;    // 1.6度
-constexpr int BODY_LIGHT_YAW_AMPLITUDE = 55;     // 5.5度
-constexpr int BODY_LIGHT_PITCH_AMPLITUDE = 25;   // 2.5度
 constexpr int BODY_JOY_YAW_AMPLITUDE = 300;      // 30.0度
 constexpr uint32_t BODY_JOY_DURATION_MS = 4800;  // 左右3往復を柔らかく
 constexpr float BODY_JOY_CYCLES = 3.0f;
 constexpr int BODY_MOTION_MAX_STEP = 24;         // 1更新あたり2.4度
 
 BodyMotionState bodyMotionState = BodyMotionState::Stopped;
+bool bodyMotionSkipAutoStart = false;
 uint32_t bodyMotionStartedAt = 0;
 uint32_t bodyMotionLastUpdateAt = 0;
 int bodyMotionYawBase = 0;
@@ -405,10 +404,11 @@ void stopBodyMotion(bool releaseServos) {
   }
 }
 
-bool startBodyMotion() {
+bool startBodyMotion(bool ignoreAutoStartSkip = false) {
   if (!calibrationController.data().servoValid ||
       currentMode != AppMode::LocalLlm ||
-      levelHoldActive) {
+      levelHoldActive ||
+      (!ignoreAutoStartSkip && bodyMotionSkipAutoStart)) {
     return false;
   }
 
@@ -448,7 +448,8 @@ void triggerPetHappyMotion() {
       levelHoldActive) {
     return;
   }
-  if (bodyMotionState == BodyMotionState::Stopped && !startBodyMotion()) {
+  if (bodyMotionState == BodyMotionState::Stopped &&
+      !startBodyMotion(true)) {
     return;
   }
 
@@ -509,14 +510,6 @@ void updateBodyMotion() {
       bodyMotionPitchBase +
       static_cast<int>(roundf(BODY_IDLE_PITCH_AMPLITUDE *
                               sinf(elapsed * 1.45f + 1.2f)));
-
-  if (cameraGazeAvailable && cameraGazeActive &&
-      now - lastCameraGazeAt < 1500) {
-    desiredYaw += static_cast<int>(
-        roundf(camGazeSmoothH * BODY_LIGHT_YAW_AMPLITUDE));
-    desiredPitch += static_cast<int>(
-        roundf(camGazeSmoothV * BODY_LIGHT_PITCH_AMPLITUDE));
-  }
 
   desiredYaw = clampBodyYaw(desiredYaw);
   desiredPitch = clampBodyPitch(desiredPitch);
@@ -749,7 +742,6 @@ void serviceApp() {
   avatarFace.update();     // アバターのステータス・まばたき・ショーケース更新
   updateLipSync();         // 口パクアニメーション更新
   updateActiveMode();      // LEVEL HOLDなどのモード固有処理
-  updateCameraGaze();      // カメラで明るい方向へ視線を向ける（発話中・メニュー中は休む）
 
   // 空きヒープの最小値を毎フレーム追跡する（断片化・リーク検出用）
   const uint32_t freeHeapNow = ESP.getFreeHeap();
@@ -1310,9 +1302,11 @@ void setup() {
   const ServoStartupChoice servoChoice = askServoStartupChoice();
   if (servoChoice == ServoStartupChoice::Calibrate) {
     Serial.println("Servo startup choice: CALIBRATE");
+    bodyMotionSkipAutoStart = true;
     calibrationController.run(avatarFace); // フルキャリブレーション実行
   } else {
     Serial.println("Servo startup choice: NO");
+    bodyMotionSkipAutoStart = false;
     M5StackChan.Motion.setTorqueEnabled(false);
     M5StackChan.setServoPowerEnabled(false);
     avatarFace.showStatus("SERVO: NO", 1800);
@@ -1340,15 +1334,6 @@ void setup() {
 
   Serial.println("Starting network configuration...");
   const bool wifiConnected = configPortal.begin();
-
-  // カメラ目線を初期化する（設定がONのときのみ）。
-  // 注意: カメラ初期化は内部I2Cを解放するため、機種によってはタッチ操作が
-  //       効かなくなることがある。その場合は設定ページで Camera gaze を OFF にする。
-  //       タッチを使う起動ダイアログ等はこの時点で完了済みなので影響しない。
-  if (configPortal.config().cameraGaze) {
-    Serial.println("Initializing camera gaze...");
-    setupCameraGaze();
-  }
 
   if (!wifiConnected) {
     // WiFi接続失敗: セットアップAPモードで起動
