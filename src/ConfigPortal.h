@@ -136,6 +136,9 @@ class ConfigPortal {
   // システム状態ページのHTMLを生成する（5秒自動更新）
   String statusHtml();
 
+  // Local LLM Chat カード（Gateway /ask をブラウザから直接叩くフロントエンド）を生成する
+  String chatHtml();
+
   // WiFiスキャン結果を<option>タグのリストとして返す
   String wifiOptionsHtml();
 

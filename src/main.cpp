@@ -475,6 +475,9 @@ void triggerPetHappyMotion() {
 
 void updateBodyMotion() {
   if (bodyMotionState == BodyMotionState::Stopped) {
+    if (!bodyMotionSkipAutoStart && bodyMotionCanUseServo()) {
+      startBodyMotion();
+    }
     return;
   }
   if (!bodyMotionCanUseServo()) {

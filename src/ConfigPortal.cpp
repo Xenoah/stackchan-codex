@@ -400,8 +400,71 @@ String ConfigPortal::pageHtml(const String& message) {
   html += F("<button type='submit'>Save &amp; Restart</button></form>"
             "<p style='color:#555;font-size:0.85em;margin-top:20px'>"
             "Configure your TTS server to accept HTTP connections "
-            "from the same LAN.</p>"
-            "</body></html>");
+            "from the same LAN.</p>");
+
+  // --- Local LLM Chat（Android Gateway の /ask をブラウザから直接叩く）---
+  // ESP32 は中継しない。fetch で http://<tts_host>:<tts_port>/ask に POST し、
+  // 返ってきた JSON（question/answer/stackchan）を画面に表示する。
+  // 発話自体は Gateway が StackChan の /api/speak を呼ぶことで行われる。
+  html += chatHtml();
+
+  html += F("</body></html>");
+  return html;
+}
+
+// Local LLM Chat カードと、Gateway /ask を呼ぶフロントエンド JS を生成する。
+// TTS Host/Port は保存済みの設定値をそのまま JS 文字列/数値として埋め込む。
+String ConfigPortal::chatHtml() {
+  String html;
+  html.reserve(2200);
+
+  html += F("<div class='card'><h3>Local LLM Chat</h3>"
+            "<textarea id='chatText' rows='3'>");
+  html += htmlEscape(F("自己紹介して"));
+  html += F("</textarea>"
+           "<button type='button' id='chatSend' "
+           "onclick='askLlm()'>LLM&#12391;&#22238;&#31572;&#12375;&#12390;&#21796;&#12427;</button>"
+           "<p id='chatStatus' class='hint'></p>"
+           "<pre id='chatAnswer' style='white-space:pre-wrap;word-break:break-word;"
+           "background:#222;color:#fff;border-radius:8px;padding:10px;"
+           "margin-top:10px;display:none'></pre>"
+           "</div>");
+
+  // Gateway のベースURL（保存済みの TTS Host/Port）を JS に埋め込む
+  html += F("<script>var GW_HOST=\"");
+  html += jsonEscape(config_.ttsHost);
+  html += F("\";var GW_PORT=");
+  html += String(config_.ttsPort);
+  html += F(";\n"
+           "function askLlm(){"
+           "var t=document.getElementById('chatText').value;"
+           "var st=document.getElementById('chatStatus');"
+           "var pre=document.getElementById('chatAnswer');"
+           "var btn=document.getElementById('chatSend');"
+           "if(!GW_HOST){st.textContent='TTS Host is not set';return;}"
+           "st.textContent='thinking...';st.className='hint';"
+           "btn.disabled=true;"
+           "var url='http://'+GW_HOST+':'+GW_PORT+'/ask';"
+           "fetch(url,{method:'POST',"
+           "headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+           "body:'text='+encodeURIComponent(t)})"
+           ".then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})"
+           ".then(function(d){"
+           "var out='';"
+           "if(d.question!=null)out+='Q: '+d.question+'\\n\\n';"
+           "if(d.answer!=null)out+='A: '+d.answer;"
+           "if(d.stackchan!=null)out+='\\n\\n[stackchan] '+"
+           "(typeof d.stackchan==='object'?JSON.stringify(d.stackchan):d.stackchan);"
+           "pre.textContent=out||JSON.stringify(d);"
+           "pre.style.display='block';"
+           "st.textContent='done';st.className='ok';"
+           "})"
+           ".catch(function(e){"
+           "st.textContent='fetch error: '+e.message;st.className='err';"
+           "})"
+           ".finally(function(){btn.disabled=false;});"
+           "}\n"
+           "</script>");
   return html;
 }
 
